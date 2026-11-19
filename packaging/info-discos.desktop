@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=CrystalDiskInfo for Linux
+Comment=Salud y temperatura de los discos
+Exec=info-discos
+Icon=info-discos
+Categories=System;Monitor;
+Terminal=false
+StartupWMClass=info-discos
