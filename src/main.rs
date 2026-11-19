@@ -4,6 +4,7 @@ mod health;
 mod i18n;
 mod integrate;
 mod polkit;
+mod smartctl;
 mod theme;
 
 use disks::{Disk, ScanResult, Status};

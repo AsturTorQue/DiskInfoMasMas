@@ -3,24 +3,14 @@
 //! The rule allows exactly `<smartctl> -j -a /dev/<name>` through pkexec, for this user,
 //! only when they are sitting at the computer (local and active session). Nothing else.
 
+use crate::smartctl::{self, shell_quote, INSTALLED, INSTALLED_DIR};
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::Path;
 use std::process::{Command, Stdio};
 
 pub const RULE_PATH: &str = "/etc/polkit-1/rules.d/49-crystaldiskinfo-linux.rules";
 /// Readable copy of the rule, so the app can tell it is installed.
 pub const MARKER_PATH: &str = "/etc/crystaldiskinfo-linux/polkit-rule.js";
-
-/// Absolute, resolved path of smartctl.
-pub fn smartctl_path() -> Option<String> {
-    let out = Command::new("sh").args(["-c", "command -v smartctl"]).output().ok()?;
-    let p = String::from_utf8_lossy(&out.stdout).trim().to_string();
-    if p.is_empty() {
-        return None;
-    }
-    let real = std::fs::canonicalize(&p).unwrap_or_else(|_| PathBuf::from(&p));
-    Some(real.to_string_lossy().into_owned())
-}
 
 fn user_name() -> Option<String> {
     let out = Command::new("id").arg("-un").output().ok()?;
@@ -61,20 +51,45 @@ polkit.addRule(function(action, subject) {{
 /// True when the rule is installed for this user. The rules folder is only readable by
 /// root, so installing also leaves a world-readable copy of the rule as a marker.
 pub fn rule_active(_sample_dev: &str) -> bool {
-    let (Some(user), Ok(text)) = (user_name(), std::fs::read_to_string(MARKER_PATH)) else {
-        return false;
-    };
-    let js_user = serde_json::to_string(&user).unwrap_or_default();
-    text.contains(&format!("subject.user == {js_user}"))
+    rule_program().is_some()
 }
 
-/// Installs the rule (one password prompt).
+/// The smartctl the installed rule allows, when the rule is for this user and that file is
+/// still a root-owned program.
+pub fn rule_program() -> Option<String> {
+    let user = user_name()?;
+    let text = std::fs::read_to_string(MARKER_PATH).ok()?;
+    let js_user = serde_json::to_string(&user).ok()?;
+    if !text.contains(&format!("subject.user == {js_user}")) {
+        return None;
+    }
+    let line = text.lines().find_map(|l| l.trim().strip_prefix("var prog = "))?;
+    let prog: String = serde_json::from_str(line.trim_end_matches(';')).ok()?;
+    smartctl::root_owned(Path::new(&prog)).then_some(prog)
+}
+
+/// Installs the rule (one password prompt). Without a system smartctl, the bundled one is
+/// first copied to a root-owned place (after checking its SHA-256), and the rule allows that.
 pub fn install() -> Result<(), &'static str> {
-    let smartctl = smartctl_path().ok_or("msg_no_smartctl")?;
     let user = user_name().ok_or("msg_rule_failed")?;
-    let text = rule_text(&user, &smartctl);
+    let (prog, copy) = match smartctl::system() {
+        Some(p) => (p, String::new()),
+        None => {
+            let (src, hash) = smartctl::stage_bundled().ok_or("msg_no_smartctl")?;
+            let copy = format!(
+                "mkdir -p {dir} && cat {src} > {tmp} && echo \"{hash}  {tmp}\" | sha256sum -c --quiet - && \
+                 chown root:root {tmp} && chmod 755 {tmp} && mv -f {tmp} {dst} && ",
+                dir = INSTALLED_DIR,
+                src = shell_quote(&src),
+                tmp = format!("{INSTALLED}.new"),
+                dst = INSTALLED,
+            );
+            (INSTALLED.to_string(), copy)
+        }
+    };
+    let text = rule_text(&user, &prog);
     let script = format!(
-        "umask 022; mkdir -p /etc/polkit-1/rules.d /etc/crystaldiskinfo-linux && cat > {RULE_PATH} && cp {RULE_PATH} {MARKER_PATH}"
+        "umask 022; {copy}mkdir -p /etc/polkit-1/rules.d /etc/crystaldiskinfo-linux && cat > {RULE_PATH} && cp {RULE_PATH} {MARKER_PATH}"
     );
     let mut child = Command::new("pkexec")
         .args(["/bin/sh", "-c", &script])
@@ -97,7 +112,7 @@ pub fn install() -> Result<(), &'static str> {
 /// Removes the rule (one password prompt).
 pub fn uninstall() -> Result<(), &'static str> {
     let status = Command::new("pkexec")
-        .args(["/bin/rm", "-f", RULE_PATH, MARKER_PATH])
+        .args(["/bin/rm", "-rf", RULE_PATH, MARKER_PATH, INSTALLED_DIR])
         .stdin(Stdio::null())
         .status()
         .map_err(|_| "msg_no_pkexec")?;

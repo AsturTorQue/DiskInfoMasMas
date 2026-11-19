@@ -11,6 +11,13 @@ APPDIR="target/AppDir"
 rm -rf "$APPDIR"
 mkdir -p "$APPDIR/usr/bin" "$APPDIR/usr/share/applications" "$APPDIR/usr/share/icons/hicolor/scalable/apps"
 cp target/release/info-discos "$APPDIR/usr/bin/"
+# Bundled smartctl (smartmontools, GPL-2.0), used when the system has none.
+packaging/build-smartctl.sh
+cp target/smartctl "$APPDIR/usr/bin/smartctl"
+mkdir -p "$APPDIR/usr/share/doc/smartmontools"
+cp target/smartmontools-license/COPYING "$APPDIR/usr/share/doc/smartmontools/COPYING"
+printf 'smartctl from smartmontools 7.5 (GPL-2.0-or-later), unmodified.\nSource: https://github.com/smartmontools/smartmontools/releases/tag/RELEASE_7_5\n' \
+    > "$APPDIR/usr/share/doc/smartmontools/SOURCE"
 strip "$APPDIR/usr/bin/info-discos" 2>/dev/null || true
 cp packaging/AppRun "$APPDIR/AppRun"
 chmod +x "$APPDIR/AppRun"

@@ -206,7 +206,10 @@ enum SmartRead {
 }
 
 fn smartctl_direct(dev: &str) -> SmartRead {
-    let out = match Command::new("smartctl").args(["-j", "-a", &format!("/dev/{dev}")]).output() {
+    let Some(smartctl) = crate::smartctl::for_user() else {
+        return SmartRead::Missing;
+    };
+    let out = match Command::new(smartctl).args(["-j", "-a", &format!("/dev/{dev}")]).output() {
         Ok(o) => o,
         Err(_) => return SmartRead::Missing,
     };
@@ -277,7 +280,7 @@ fn smartctl_passwordless(dev: &str) -> Option<Value> {
     if !dev.chars().all(|c| c.is_ascii_alphanumeric()) {
         return None;
     }
-    let smartctl = crate::polkit::smartctl_path()?;
+    let smartctl = crate::polkit::rule_program()?;
     let out = Command::new("pkexec")
         .args(crate::polkit::read_args(&smartctl, dev))
         .stdin(std::process::Stdio::null())
@@ -292,7 +295,10 @@ fn smartctl_admin(devs: &[String]) -> Result<Vec<(String, Value)>, &'static str>
         .iter()
         .filter(|d| d.chars().all(|c| c.is_ascii_alphanumeric()))
         .collect();
-    let script = r#"for d in "$@"; do echo "@@DEV $d"; smartctl -j -a "/dev/$d"; done"#;
+    let trusted = crate::smartctl::trusted();
+    let staged = if trusted.is_none() { crate::smartctl::stage_bundled() } else { None };
+    let prelude = crate::smartctl::root_prelude(trusted.as_deref(), staged.as_ref()).ok_or("msg_no_smartctl")?;
+    let script = format!(r#"{prelude}; for d in "$@"; do echo "@@DEV $d"; "$SMARTCTL" -j -a "/dev/$d"; done"#);
     let out = Command::new("pkexec")
         .arg("/bin/sh")
         .arg("-c")
