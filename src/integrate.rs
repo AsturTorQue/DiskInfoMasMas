@@ -1,13 +1,13 @@
 //! Adds the program to the user's application menu (no administrator rights needed).
 //!
 //! On Wayland the window icon comes from the menu entry whose name matches the window's
-//! app id ("info-discos"), so without this entry the taskbar shows a generic icon.
+//! app id ("diskinfo"), so without this entry the taskbar shows a generic icon.
 
 use std::fs;
 use std::path::PathBuf;
 
-const APP_ID: &str = "info-discos";
-const ICON_PNG: &[u8] = include_bytes!("../packaging/info-discos.png");
+const APP_ID: &str = "diskinfo";
+const ICON_PNG: &[u8] = include_bytes!("../packaging/diskinfo.png");
 
 fn data_home() -> Option<PathBuf> {
     std::env::var_os("XDG_DATA_HOME")
@@ -45,7 +45,7 @@ fn exec_quote(p: &str) -> String {
 
 fn entry_text(program: &str, icon: &str, comment: &str) -> String {
     format!(
-        "[Desktop Entry]\nType=Application\nName={}\nComment={comment}\nExec={}\nIcon={icon}\nCategories=System;Monitor;\nTerminal=false\nStartupWMClass={APP_ID}\nX-CrystalDiskInfo-Linux=1\n",
+        "[Desktop Entry]\nType=Application\nName={}\nComment={comment}\nExec={}\nIcon={icon}\nCategories=System;Monitor;\nTerminal=false\nStartupWMClass={APP_ID}\nX-DiskInfo=1\n",
         crate::APP_NAME,
         exec_quote(program)
     )
@@ -53,6 +53,7 @@ fn entry_text(program: &str, icon: &str, comment: &str) -> String {
 
 /// Writes (or refreshes) the menu entry and the icon. Cheap; rewrites only on change.
 pub fn install(comment: &str) -> bool {
+    remove_legacy();
     let (Some(desktop), Some(icon), Some(program)) = (desktop_path(), icon_path(), program_path()) else {
         return false;
     };
@@ -72,11 +73,21 @@ pub fn install(comment: &str) -> bool {
     fs::write(&desktop, text).is_ok()
 }
 
+/// Removes the entry and icon written by versions from before the rename ("info-discos").
+fn remove_legacy() {
+    let Some(base) = data_home() else { return };
+    let desktop = base.join("applications/info-discos.desktop");
+    if fs::read_to_string(&desktop).map(|t| t.contains("X-CrystalDiskInfo-Linux=1")).unwrap_or(false) {
+        let _ = fs::remove_file(desktop);
+        let _ = fs::remove_file(base.join("icons/hicolor/256x256/apps/info-discos.png"));
+    }
+}
+
 /// Removes the menu entry and icon written by `install`.
 pub fn uninstall() {
     if let Some(p) = desktop_path() {
         // Only remove an entry this program wrote.
-        if fs::read_to_string(&p).map(|t| t.contains("X-CrystalDiskInfo-Linux=1")).unwrap_or(false) {
+        if fs::read_to_string(&p).map(|t| t.contains("X-DiskInfo=1")).unwrap_or(false) {
             let _ = fs::remove_file(p);
         }
     }
@@ -93,8 +104,8 @@ mod tests {
 
     #[test]
     fn exec_line_quotes_spaces() {
-        let t = entry_text("/home/a b/CrystalDiskInfo.AppImage", "/x/i.png", "c");
-        assert!(t.contains("Exec=\"/home/a b/CrystalDiskInfo.AppImage\"\n"));
-        assert!(t.contains("StartupWMClass=info-discos"));
+        let t = entry_text("/home/a b/DiskInfo.AppImage", "/x/i.png", "c");
+        assert!(t.contains("Exec=\"/home/a b/DiskInfo.AppImage\"\n"));
+        assert!(t.contains("StartupWMClass=diskinfo"));
     }
 }

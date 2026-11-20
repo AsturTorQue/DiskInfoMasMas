@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=DiskInfo
+Comment=Disk health and temperature
+Comment[es]=Salud y temperatura de los discos
+Exec=diskinfo
+Icon=diskinfo
+Categories=System;Monitor;
+Terminal=false
+StartupWMClass=diskinfo

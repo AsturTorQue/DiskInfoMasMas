@@ -3,14 +3,17 @@
 //! The rule allows exactly `<smartctl> -j -a /dev/<name>` through pkexec, for this user,
 //! only when they are sitting at the computer (local and active session). Nothing else.
 
-use crate::smartctl::{self, shell_quote, INSTALLED, INSTALLED_DIR};
+use crate::smartctl::{self, shell_quote, INSTALLED, INSTALLED_DIR, LEGACY_INSTALLED_DIR};
 use std::io::Write;
 use std::path::Path;
 use std::process::{Command, Stdio};
 
-pub const RULE_PATH: &str = "/etc/polkit-1/rules.d/49-crystaldiskinfo-linux.rules";
+pub const RULE_PATH: &str = "/etc/polkit-1/rules.d/49-diskinfo.rules";
 /// Readable copy of the rule, so the app can tell it is installed.
-pub const MARKER_PATH: &str = "/etc/crystaldiskinfo-linux/polkit-rule.js";
+pub const MARKER_PATH: &str = "/etc/diskinfo/polkit-rule.js";
+/// Where versions from before the rename put them; still honoured and removed on uninstall.
+const LEGACY_RULE_PATH: &str = "/etc/polkit-1/rules.d/49-crystaldiskinfo-linux.rules";
+const LEGACY_MARKER_PATH: &str = "/etc/crystaldiskinfo-linux/polkit-rule.js";
 
 fn user_name() -> Option<String> {
     let out = Command::new("id").arg("-un").output().ok()?;
@@ -27,7 +30,7 @@ pub fn read_args(smartctl: &str, dev: &str) -> [String; 4] {
 fn rule_text(user: &str, smartctl: &str) -> String {
     let js = |s: &str| serde_json::to_string(s).unwrap_or_else(|_| "\"\"".into());
     format!(
-        r#"// Added by CrystalDiskInfo for Linux: lets {user} read disk health without a password.
+        r#"// Added by DiskInfo: lets {user} read disk health without a password.
 // Only allows "smartctl -j -a /dev/<disk>" (read-only). Remove this file to undo.
 polkit.addRule(function(action, subject) {{
     if (action.id != "org.freedesktop.policykit.exec") return polkit.Result.NOT_HANDLED;
@@ -58,7 +61,9 @@ pub fn rule_active(_sample_dev: &str) -> bool {
 /// still a root-owned program.
 pub fn rule_program() -> Option<String> {
     let user = user_name()?;
-    let text = std::fs::read_to_string(MARKER_PATH).ok()?;
+    let text = std::fs::read_to_string(MARKER_PATH)
+        .or_else(|_| std::fs::read_to_string(LEGACY_MARKER_PATH))
+        .ok()?;
     let js_user = serde_json::to_string(&user).ok()?;
     if !text.contains(&format!("subject.user == {js_user}")) {
         return None;
@@ -89,7 +94,7 @@ pub fn install() -> Result<(), &'static str> {
     };
     let text = rule_text(&user, &prog);
     let script = format!(
-        "umask 022; {copy}mkdir -p /etc/polkit-1/rules.d /etc/crystaldiskinfo-linux && cat > {RULE_PATH} && cp {RULE_PATH} {MARKER_PATH}"
+        "umask 022; {copy}mkdir -p /etc/polkit-1/rules.d /etc/diskinfo && rm -f {LEGACY_RULE_PATH} {LEGACY_MARKER_PATH} && cat > {RULE_PATH} && cp {RULE_PATH} {MARKER_PATH}"
     );
     let mut child = Command::new("pkexec")
         .args(["/bin/sh", "-c", &script])
@@ -112,7 +117,7 @@ pub fn install() -> Result<(), &'static str> {
 /// Removes the rule (one password prompt).
 pub fn uninstall() -> Result<(), &'static str> {
     let status = Command::new("pkexec")
-        .args(["/bin/rm", "-rf", RULE_PATH, MARKER_PATH, INSTALLED_DIR])
+        .args(["/bin/rm", "-rf", RULE_PATH, MARKER_PATH, INSTALLED_DIR, LEGACY_RULE_PATH, LEGACY_MARKER_PATH, LEGACY_INSTALLED_DIR])
         .stdin(Stdio::null())
         .status()
         .map_err(|_| "msg_no_pkexec")?;

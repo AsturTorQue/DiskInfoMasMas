@@ -1,8 +1,9 @@
-//! Finding disks and reading their S.M.A.R.T. data on Linux.
+//! Finding disks and reading their S.M.A.R.T. data (Linux, Windows and macOS).
 
 use serde_json::Value;
 use std::fs;
 use std::path::Path;
+#[cfg(target_os = "linux")]
 use std::process::Command;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
@@ -53,9 +54,26 @@ pub struct Disk {
     pub smart_read: bool,
     pub mounts: Vec<String>,
     pub health: Status,
+    /// Device smartctl opens on Windows/macOS ("/dev/sda", "/dev/disk0"); empty on Linux.
+    #[allow(dead_code)]
+    pub smart_dev: String,
+    /// smartctl's -d type for it, when known.
+    #[allow(dead_code)]
+    pub smart_type: Option<String>,
+    /// How the disk is named to the person ("PhysicalDrive0", "/dev/disk0"); empty on Linux.
+    pub path_label: String,
 }
 
 impl Disk {
+    /// The disk's name in the system, for display.
+    pub fn place(&self) -> String {
+        if self.path_label.is_empty() {
+            format!("/dev/{}", self.dev)
+        } else {
+            self.path_label.clone()
+        }
+    }
+
     /// Key used to remember per-disk settings.
     pub fn key(&self) -> String {
         format!("{}{}", self.model, self.serial)
@@ -72,6 +90,7 @@ pub struct ScanResult {
     pub passwordless: bool,
 }
 
+#[cfg(target_os = "linux")]
 fn run(cmd: &str, args: &[&str]) -> Option<String> {
     let out = Command::new(cmd).args(args).output().ok()?;
     Some(String::from_utf8_lossy(&out.stdout).into_owned())
@@ -81,6 +100,7 @@ fn read_trim(p: impl AsRef<Path>) -> Option<String> {
     fs::read_to_string(p).ok().map(|s| s.trim().to_string()).filter(|s| !s.is_empty())
 }
 
+#[cfg(target_os = "linux")]
 /// Lists physical disks with what Linux tells any user, without S.M.A.R.T.
 pub fn list_disks() -> Vec<Disk> {
     let Some(txt) = run(
@@ -131,10 +151,12 @@ pub fn list_disks() -> Vec<Disk> {
     disks
 }
 
+#[cfg(target_os = "linux")]
 fn as_bool(v: &Value) -> bool {
     v.as_bool().unwrap_or_else(|| v.as_str() == Some("1") || v.as_u64() == Some(1))
 }
 
+#[cfg(target_os = "linux")]
 fn collect_mounts(node: &Value, out: &mut Vec<String>) {
     for m in node["mountpoints"].as_array().into_iter().flatten() {
         if let Some(s) = m.as_str() {
@@ -148,6 +170,7 @@ fn collect_mounts(node: &Value, out: &mut Vec<String>) {
     }
 }
 
+#[cfg(target_os = "linux")]
 /// "PCIe 3.0 x4 | PCIe 4.0 x4" (current | supported) from the PCI link.
 fn pcie_mode(dev: &str) -> String {
     let base = format!("/sys/block/{dev}/device/device");
@@ -205,11 +228,17 @@ enum SmartRead {
     Failed,
 }
 
-fn smartctl_direct(dev: &str) -> SmartRead {
+/// Runs `smartctl -j -a` as this user.
+fn smartctl_read(path: &str, dtype: Option<&str>) -> SmartRead {
     let Some(smartctl) = crate::smartctl::for_user() else {
         return SmartRead::Missing;
     };
-    let out = match Command::new(smartctl).args(["-j", "-a", &format!("/dev/{dev}")]).output() {
+    let mut cmd = crate::platform::command(smartctl);
+    cmd.args(["-j", "-a"]);
+    if let Some(t) = dtype {
+        cmd.args(["-d", t]);
+    }
+    let out = match cmd.arg(path).output() {
         Ok(o) => o,
         Err(_) => return SmartRead::Missing,
     };
@@ -220,7 +249,10 @@ fn smartctl_direct(dev: &str) -> SmartRead {
         .as_array()
         .into_iter()
         .flatten()
-        .any(|m| m["string"].as_str().unwrap_or("").contains("Permission denied"));
+        .any(|m| {
+            let s = m["string"].as_str().unwrap_or("");
+            s.contains("Permission denied") || s.contains("Access is denied") || s.contains("Operation not permitted")
+        });
     if denied {
         SmartRead::Denied
     } else if j.get("device").is_some() {
@@ -230,8 +262,20 @@ fn smartctl_direct(dev: &str) -> SmartRead {
     }
 }
 
-/// Full scan. With `admin`, one pkexec prompt reads every disk.
+/// Full scan. With `admin`, one administrator prompt reads every disk (Linux and macOS).
 pub fn scan(admin: bool) -> ScanResult {
+    #[cfg(target_os = "linux")]
+    {
+        scan_linux(admin)
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        scan_other(admin)
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn scan_linux(admin: bool) -> ScanResult {
     let mut disks = list_disks();
     let mut needs_admin = false;
     let mut message = None;
@@ -253,12 +297,10 @@ pub fn scan(admin: bool) -> ScanResult {
         }
     } else {
         for d in &mut disks {
-            match smartctl_direct(&d.dev) {
+            match smartctl_read(&format!("/dev/{}", d.dev), None) {
                 SmartRead::Ok(j) => parse_smart(d, &j),
                 SmartRead::Denied => needs_admin = true,
-                SmartRead::Missing => {
-                    message = Some("msg_no_smartctl")
-                }
+                SmartRead::Missing => message = Some("msg_no_smartctl"),
                 SmartRead::Failed => {}
             }
         }
@@ -276,6 +318,7 @@ pub fn scan(admin: bool) -> ScanResult {
     ScanResult { disks, needs_admin, message, passwordless }
 }
 
+#[cfg(target_os = "linux")]
 fn smartctl_passwordless(dev: &str) -> Option<Value> {
     if !dev.chars().all(|c| c.is_ascii_alphanumeric()) {
         return None;
@@ -290,6 +333,7 @@ fn smartctl_passwordless(dev: &str) -> Option<Value> {
     j.get("device").is_some().then_some(j)
 }
 
+#[cfg(target_os = "linux")]
 fn smartctl_admin(devs: &[String]) -> Result<Vec<(String, Value)>, &'static str> {
     let safe: Vec<&String> = devs
         .iter()
@@ -311,6 +355,12 @@ fn smartctl_admin(devs: &[String]) -> Result<Vec<(String, Value)>, &'static str>
     if !text.contains("@@DEV") {
         return Err("msg_denied");
     }
+    Ok(split_dev_chunks(&text))
+}
+
+/// Splits "@@DEV <name>\n<json>" blocks.
+#[allow(dead_code)]
+fn split_dev_chunks(text: &str) -> Vec<(String, Value)> {
     let mut res = Vec::new();
     for chunk in text.split("@@DEV ").skip(1) {
         let (dev, body) = chunk.split_once('\n').unwrap_or((chunk, ""));
@@ -320,7 +370,191 @@ fn smartctl_admin(devs: &[String]) -> Result<Vec<(String, Value)>, &'static str>
             }
         }
     }
-    Ok(res)
+    res
+}
+
+/// Windows and macOS: disks come from smartctl itself (plus Windows' own disk list).
+#[cfg(not(target_os = "linux"))]
+fn scan_other(admin: bool) -> ScanResult {
+    let mut result = ScanResult { disks: Vec::new(), needs_admin: false, message: None, passwordless: false };
+    let Some(smartctl) = crate::smartctl::for_user() else {
+        result.message = Some("msg_no_smartctl");
+        return result;
+    };
+    #[cfg(target_os = "macos")]
+    if admin {
+        match mac_admin_read(&smartctl) {
+            Ok(list) => {
+                for (name, j) in list {
+                    let mut d = disk_for(&name, None);
+                    parse_smart(&mut d, &j);
+                    result.disks.push(d);
+                }
+                return result;
+            }
+            Err(e) => result.message = Some(e),
+        }
+    }
+    let _ = admin;
+    for (name, dtype) in scan_devices(&smartctl) {
+        let mut d = disk_for(&name, dtype.clone());
+        match smartctl_read(&name, dtype.as_deref()) {
+            SmartRead::Ok(j) => parse_smart(&mut d, &j),
+            SmartRead::Denied => result.needs_admin = true,
+            _ => {}
+        }
+        result.disks.push(d);
+    }
+    #[cfg(windows)]
+    windows_merge(&mut result);
+    if result.disks.iter().all(|d| !d.smart_read) && !crate::platform::is_admin() {
+        result.needs_admin = true;
+    }
+    for d in &mut result.disks {
+        if d.model.is_empty() {
+            d.model = d.path_label.clone();
+        }
+    }
+    result
+}
+
+#[cfg(not(target_os = "linux"))]
+fn disk_for(name: &str, dtype: Option<String>) -> Disk {
+    let short = name.trim_start_matches("/dev/").to_string();
+    Disk {
+        dev: short,
+        smart_dev: name.to_string(),
+        smart_type: dtype,
+        path_label: name.to_string(),
+        ..Default::default()
+    }
+}
+
+/// `smartctl --scan-open -j`: device names and types.
+#[cfg(not(target_os = "linux"))]
+fn scan_devices(smartctl: &str) -> Vec<(String, Option<String>)> {
+    let Ok(out) = crate::platform::command(smartctl).args(["--scan-open", "-j"]).output() else {
+        return Vec::new();
+    };
+    let Ok(j) = serde_json::from_slice::<Value>(&out.stdout) else {
+        return Vec::new();
+    };
+    j["devices"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|d| {
+            let name = d["name"].as_str()?.to_string();
+            let t = d["type"].as_str().map(str::to_string);
+            Some((name, t))
+        })
+        .collect()
+}
+
+/// macOS: one administrator prompt (osascript) runs smartctl on every disk as root.
+#[cfg(target_os = "macos")]
+fn mac_admin_read(smartctl: &str) -> Result<Vec<(String, Value)>, &'static str> {
+    let q = crate::smartctl::shell_quote(smartctl);
+    let script = format!(
+        "{q} --scan | while read n x t r; do echo \"@@DEV $n\"; {q} -j -a -d \"$t\" \"$n\"; done"
+    );
+    let apple = format!(
+        "do shell script \"{}\" with administrator privileges",
+        script.replace('\\', "\\\\").replace('"', "\\\"")
+    );
+    let out = crate::platform::command("osascript")
+        .args(["-e", &apple])
+        .output()
+        .map_err(|_| "msg_denied")?;
+    // osascript returns the script's output with \r line ends.
+    let text = String::from_utf8_lossy(&out.stdout).replace('\r', "\n");
+    if !text.contains("@@DEV") {
+        return Err("msg_denied");
+    }
+    Ok(split_dev_chunks(&text))
+}
+
+/// Windows: disks Windows itself lists (works without administrator rights) and drive letters.
+#[cfg(windows)]
+fn windows_merge(result: &mut ScanResult) {
+    let ps = "$d = @(Get-PhysicalDisk | Select-Object DeviceId,FriendlyName,SerialNumber,Size,MediaType,BusType,FirmwareVersion); \
+              $p = @(Get-Partition | Where-Object DriveLetter | Select-Object DiskNumber,DriveLetter); \
+              @{disks=$d; parts=$p} | ConvertTo-Json -Depth 3 -Compress";
+    let Ok(out) = crate::platform::command("powershell").args(["-NoProfile", "-Command", ps]).output() else {
+        return;
+    };
+    let Ok(j) = serde_json::from_slice::<Value>(&out.stdout) else { return };
+    let num = |v: &Value| v.as_u64().or_else(|| v.as_str().and_then(|s| s.parse().ok()));
+    // smartctl names /dev/sda.. and /dev/pdN map to PhysicalDriveN.
+    let index_of = |name: &str| -> Option<u64> {
+        let n = name.trim_start_matches("/dev/");
+        if let Some(rest) = n.strip_prefix("pd") {
+            return rest.parse().ok();
+        }
+        let rest = n.strip_prefix("sd")?;
+        let mut idx: u64 = 0;
+        for c in rest.chars() {
+            if !c.is_ascii_lowercase() {
+                return None;
+            }
+            idx = idx * 26 + (c as u64 - 'a' as u64 + 1);
+        }
+        idx.checked_sub(1)
+    };
+    for pd in j["disks"].as_array().into_iter().flatten() {
+        let Some(id) = num(&pd["DeviceId"]) else { continue };
+        let pos = result.disks.iter().position(|d| index_of(&d.smart_dev) == Some(id));
+        let d = match pos {
+            Some(i) => &mut result.disks[i],
+            None => {
+                result.disks.push(disk_for(&format!("/dev/pd{id}"), None));
+                result.disks.last_mut().unwrap()
+            }
+        };
+        d.path_label = format!("PhysicalDrive{id}");
+        if d.model.is_empty() {
+            d.model = pd["FriendlyName"].as_str().unwrap_or("").trim().to_string();
+        }
+        if d.serial.is_empty() {
+            d.serial = pd["SerialNumber"].as_str().unwrap_or("").trim().to_string();
+        }
+        if d.firmware.is_empty() {
+            d.firmware = pd["FirmwareVersion"].as_str().unwrap_or("").trim().to_string();
+        }
+        if d.size_bytes == 0 {
+            d.size_bytes = num(&pd["Size"]).unwrap_or(0);
+        }
+        if !d.smart_read {
+            let media = pd["MediaType"].as_str().map(str::to_string).unwrap_or_else(|| num(&pd["MediaType"]).unwrap_or(0).to_string());
+            d.is_ssd = media == "SSD" || media == "4";
+            let bus = pd["BusType"].as_str().map(str::to_string).unwrap_or_else(|| num(&pd["BusType"]).unwrap_or(0).to_string());
+            d.is_nvme = bus == "NVMe" || bus == "17";
+            d.interface = match bus.as_str() {
+                "NVMe" | "17" => "NVM Express",
+                "SATA" | "11" => "Serial ATA",
+                "USB" | "7" => "USB",
+                "RAID" | "8" => "RAID",
+                "SAS" | "10" => "SAS",
+                _ => "—",
+            }
+            .to_string();
+        }
+        for p in j["parts"].as_array().into_iter().flatten() {
+            if num(&p["DiskNumber"]) == Some(id) {
+                // A [char] may come out as text ("C") or as its character code (67).
+                let letter = p["DriveLetter"]
+                    .as_str()
+                    .map(str::to_string)
+                    .or_else(|| num(&p["DriveLetter"]).and_then(|c| char::from_u32(c as u32)).map(String::from));
+                if let Some(l) = letter.filter(|l| !l.is_empty() && l != "\0") {
+                    let m = format!("{l}:");
+                    if !d.mounts.contains(&m) {
+                        d.mounts.push(m);
+                    }
+                }
+            }
+        }
+    }
 }
 
 const NVME_ROWS: [(u16, &str, &str); 15] = [

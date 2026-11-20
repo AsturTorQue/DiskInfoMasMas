@@ -1,8 +1,14 @@
+// No console window behind the app on Windows (release builds).
+#![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
+
 mod demo;
 mod disks;
 mod health;
 mod i18n;
+#[cfg(target_os = "linux")]
 mod integrate;
+mod platform;
+#[cfg(target_os = "linux")]
 mod polkit;
 mod smartctl;
 mod theme;
@@ -46,16 +52,16 @@ impl Default for Settings {
 }
 
 fn settings_path() -> Option<PathBuf> {
-    let base = std::env::var_os("XDG_CONFIG_HOME")
-        .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))?;
-    Some(base.join("info-discos").join("settings.json"))
+    Some(platform::config_dir()?.join("settings.json"))
 }
 
 impl Settings {
     fn load() -> Self {
+        // Settings saved before the rename are picked up once, then saved in the new place.
+        let legacy = || platform::legacy_config_dir().map(|d| d.join("settings.json"));
         settings_path()
             .and_then(|p| std::fs::read_to_string(p).ok())
+            .or_else(|| legacy().and_then(|p| std::fs::read_to_string(p).ok()))
             .and_then(|t| serde_json::from_str(&t).ok())
             .unwrap_or_default()
     }
@@ -103,7 +109,7 @@ struct App {
     shot: Option<Shot>,
 }
 
-pub const APP_NAME: &str = "CrystalDiskInfo for Linux";
+pub const APP_NAME: &str = "DiskInfo";
 
 const AUTO_REFRESH_CHOICES: [u32; 8] = [0, 1, 3, 5, 10, 30, 60, 120];
 
@@ -207,6 +213,19 @@ impl App {
             }
             self.last_refresh = Instant::now();
         }
+    }
+
+    /// Reads S.M.A.R.T. with administrator rights: one password prompt on Linux and macOS;
+    /// on Windows the program restarts itself elevated (UAC) and this copy closes.
+    fn read_as_admin(&mut self) {
+        #[cfg(windows)]
+        {
+            if platform::relaunch_as_admin() {
+                std::process::exit(0);
+            }
+        }
+        #[cfg(not(windows))]
+        self.start_scan(true);
     }
 
     fn refresh(&mut self) {
@@ -429,16 +448,19 @@ impl eframe::App for App {
         egui::TopBottomPanel::top("menu").show(ctx, |ui| {
             egui::menu::bar(ui, |ui| {
                 ui.menu_button(self.tr("menu_file"), |ui| {
-                    let label = self.tr("menu_entry");
-                    if ui.checkbox(&mut self.settings.menu_entry, label).changed() {
-                        if self.settings.menu_entry {
-                            integrate::install(self.tr("about_1"));
-                        } else {
-                            integrate::uninstall();
+                    #[cfg(target_os = "linux")]
+                    {
+                        let label = self.tr("menu_entry");
+                        if ui.checkbox(&mut self.settings.menu_entry, label).changed() {
+                            if self.settings.menu_entry {
+                                integrate::install(self.tr("about_1"));
+                            } else {
+                                integrate::uninstall();
+                            }
+                            self.settings.save();
                         }
-                        self.settings.save();
+                        ui.separator();
                     }
-                    ui.separator();
                     if ui.button(self.tr("quit")).clicked() {
                         ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                     }
@@ -456,7 +478,7 @@ impl eframe::App for App {
                         ui.close_menu();
                     }
                     if ui.button(self.tr("read_admin")).clicked() {
-                        self.start_scan(true);
+                        self.read_as_admin();
                         ui.close_menu();
                     }
                     ui.menu_button(self.tr("auto_refresh"), |ui| {
@@ -469,7 +491,7 @@ impl eframe::App for App {
                             }
                         }
                     });
-                    if ui.button(self.tr("pw_menu")).clicked() {
+                    if cfg!(target_os = "linux") && ui.button(self.tr("pw_menu")).clicked() {
                         self.show_pw = true;
                         ui.close_menu();
                     }
@@ -500,7 +522,7 @@ impl eframe::App for App {
                 });
                 ui.menu_button(self.tr("menu_disk"), |ui| {
                     for i in 0..self.disks.len() {
-                        let label = format!("({}) {} — /dev/{}", i + 1, self.disks[i].model, self.disks[i].dev);
+                        let label = format!("({}) {} — {}", i + 1, self.disks[i].model, self.disks[i].place());
                         if ui.radio(self.selected == i, label).clicked() {
                             self.selected = i;
                             ui.close_menu();
@@ -538,11 +560,16 @@ impl eframe::App for App {
                     .corner_radius(4)
                     .show(ui, |ui| {
                         ui.horizontal_wrapped(|ui| {
-                            ui.label(RichText::new(self.tr("admin_banner")).color(pal.banner_text));
-                            if ui.add_enabled(self.scanning.is_none(), egui::Button::new(self.tr("read_smart_btn"))).clicked() {
-                                self.start_scan(true);
+                            let (text, button) = if cfg!(windows) {
+                                ("admin_banner_win", "restart_admin")
+                            } else {
+                                ("admin_banner", "read_smart_btn")
+                            };
+                            ui.label(RichText::new(self.tr(text)).color(pal.banner_text));
+                            if ui.add_enabled(self.scanning.is_none(), egui::Button::new(self.tr(button))).clicked() {
+                                self.read_as_admin();
                             }
-                            if ui.button(self.tr("pw_banner_btn")).clicked() {
+                            if cfg!(target_os = "linux") && ui.button(self.tr("pw_banner_btn")).clicked() {
                                 self.show_pw = true;
                             }
                         });
@@ -565,7 +592,7 @@ impl eframe::App for App {
                         let th = self.settings.thresholds_for(d);
                         let (fill, _) = self.status_colors(d.health);
                         let (tfill, _) = self.status_colors(health::temperature_status(d.temperature, &th));
-                        let place = d.mounts.first().cloned().unwrap_or_else(|| format!("/dev/{}", d.dev));
+                        let place = d.mounts.first().cloned().unwrap_or_else(|| d.place());
                         let sel = i == self.selected;
                         let resp = egui::Frame::new()
                             .fill(if sel { pal.tab_sel_bg } else { pal.tab_bg })
@@ -588,7 +615,7 @@ impl eframe::App for App {
                             .response
                             .interact(egui::Sense::click());
                         let mounts = if d.mounts.is_empty() { "—".to_string() } else { d.mounts.join("\n") };
-                        let tab_tip = format!("{}\n/dev/{}\n{}\n\n{}", d.model, d.dev, mounts, self.tr("h_tab"));
+                        let tab_tip = format!("{}\n{}\n{}\n\n{}", d.model, d.place(), mounts, self.tr("h_tab"));
                         let resp = resp.on_hover_text(tab_tip);
                         if resp.clicked() {
                             self.selected = i;
@@ -752,7 +779,7 @@ impl eframe::App for App {
             let mut apply = false;
             egui::Window::new(self.tr("thresholds_title")).open(&mut open).resizable(false).collapsible(false).show(ctx, |ui| {
                 let d = &self.disks[self.selected];
-                ui.label(format!("{} (/dev/{})", d.model, d.dev));
+                ui.label(format!("{} ({})", d.model, d.place()));
                 ui.add_space(4.0);
                 let lang = self.settings.language;
                 egui::Grid::new("th").num_columns(2).show(ui, |ui| {
@@ -835,6 +862,7 @@ impl eframe::App for App {
                         }
                     });
                 });
+            #[cfg(target_os = "linux")]
             if let Some(enable) = action {
                 let (tx, rx) = channel();
                 std::thread::spawn(move || {
@@ -843,6 +871,8 @@ impl eframe::App for App {
                 });
                 self.pw_task = Some(rx);
             }
+            #[cfg(not(target_os = "linux"))]
+            let _ = action;
         }
 
         if self.show_about {
@@ -905,7 +935,7 @@ impl App {
 
 /// The program icon, built into the program.
 fn window_icon() -> Option<egui::IconData> {
-    let img = image::load_from_memory(include_bytes!("../packaging/info-discos.png")).ok()?.into_rgba8();
+    let img = image::load_from_memory(include_bytes!("../packaging/diskinfo.png")).ok()?.into_rgba8();
     let (width, height) = img.dimensions();
     Some(egui::IconData { rgba: img.into_raw(), width, height })
 }
@@ -921,6 +951,7 @@ fn main() -> eframe::Result<()> {
     let demo = args.iter().any(|a| a == "--demo");
     // Keep the application-menu entry current (it gives the window its icon on Wayland).
     // Checks (--screenshot) and --demo runs leave the user's files alone.
+    #[cfg(target_os = "linux")]
     if shot.is_none() && !demo {
         let s = Settings::load();
         if s.menu_entry {
@@ -951,7 +982,7 @@ fn main() -> eframe::Result<()> {
         .with_inner_size([700.0, 640.0])
         .with_min_inner_size([560.0, 480.0])
         // Matches the .desktop file name, so the desktop shows the same icon in the dock.
-        .with_app_id("info-discos");
+        .with_app_id("diskinfo");
     if let Some(icon) = window_icon() {
         viewport = viewport.with_icon(icon);
     }
