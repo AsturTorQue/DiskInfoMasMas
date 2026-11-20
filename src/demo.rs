@@ -13,6 +13,17 @@ pub fn demo_scan() -> ScanResult {
         "interface_speed": {"max": {"string": "6.0 Gb/s"}, "current": {"string": "6.0 Gb/s"}},
         "smart_support": {"available": true}, "power_on_time": {"hours": 21034}, "power_cycle_count": 812,
         "temperature": {"current": 38},
+        "ata_sct_status": {"temperature": {"current": 38, "power_cycle_min": 31, "power_cycle_max": 41, "lifetime_min": 18, "lifetime_max": 52, "op_limit_max": 60}},
+        "ata_smart_data": {"self_test": {"status": {"value": 0, "string": "completed without error"}, "polling_minutes": {"short": 1, "extended": 512}}},
+        "ata_smart_self_test_log": {"standard": {"table": [
+            {"type": {"string": "Short offline"}, "status": {"string": "Completed without error"}, "lifetime_hours": 21010},
+            {"type": {"string": "Extended offline"}, "status": {"string": "Completed without error"}, "lifetime_hours": 20500}
+        ]}},
+        "sata_phy_event_counters": {"table": [
+            {"id": 1, "name": "Command failed due to ICRC error", "value": 0},
+            {"id": 10, "name": "Device-to-host register FISes sent due to a COMRESET", "value": 3}
+        ]},
+        "write_cache": {"enabled": true}, "read_lookahead": {"enabled": true},
         "ata_smart_attributes": {"table": [
             {"id": 1, "name": "Raw_Read_Error_Rate", "value": 83, "worst": 64, "thresh": 6, "raw": {"value": 197316232u64}},
             {"id": 3, "name": "Spin_Up_Time", "value": 96, "worst": 96, "thresh": 0, "raw": {"value": 0}},
@@ -36,8 +47,17 @@ pub fn demo_scan() -> ScanResult {
             "critical_warning": 0, "temperature": 41, "available_spare": 100, "available_spare_threshold": 10,
             "percentage_used": 3, "data_units_read": 31205678, "data_units_written": 29876543, "host_reads": 512345678,
             "host_writes": 498765432, "controller_busy_time": 1234, "power_cycles": 1520, "power_on_hours": 4120,
-            "unsafe_shutdowns": 61, "media_errors": 0, "num_err_log_entries": 0
-        }
+            "unsafe_shutdowns": 61, "media_errors": 0, "num_err_log_entries": 0,
+            "temperature_sensors": [41, 52]
+        },
+        "nvme_composite_temperature_threshold": {"warning": 82, "critical": 85},
+        "nvme_power_states": [
+            {"non_operational_state": false, "max_power": {"value": 750, "scale": 2, "units_per_watt": 100}},
+            {"non_operational_state": false, "max_power": {"value": 580, "scale": 2, "units_per_watt": 100}},
+            {"non_operational_state": true, "max_power": {"value": 5, "scale": 2, "units_per_watt": 100}}
+        ],
+        "nvme_self_test_log": {"current_self_test_operation": {"value": 0, "string": "No self-test in progress"},
+            "table": [{"self_test_code": {"string": "Short"}, "self_test_result": {"string": "Completed without error"}, "power_on_hours": 4100}]}
     });
     let mut a = Disk {
         dev: "sda".into(),
@@ -65,7 +85,9 @@ pub fn demo_scan() -> ScanResult {
         free: used.map(|u| size.saturating_sub(u)),
         mounts: if mount.is_empty() { vec![] } else { vec![mount.into()] },
         kind: kind.into(),
-        uuid: String::new(),
+        encryption: if fs.starts_with("crypto_LUKS") { "LUKS".into() } else { String::new() },
+        inodes_used: if fs.contains("ext4") { Some(0.12) } else { None },
+        ..Default::default()
     };
     a.partitions = vec![
         part("sda1", "", "", 134_217_728, None, "", "Microsoft reserved"),
@@ -78,9 +100,37 @@ pub fn demo_scan() -> ScanResult {
     b.partitions = vec![
         part("nvme0n1p1", "EFI", "vfat", 600_000_000, Some(20_000_000), "/boot/efi", "EFI System"),
         part("nvme0n1p2", "boot", "ext4", 2 * gb, Some(450_000_000), "/boot", "Linux extended boot"),
-        part("nvme0n1p3", "fedora", "crypto_LUKS → btrfs", 997 * gb, Some(870 * gb), "/", "Linux filesystem"),
+        part("nvme0n1p3", "fedora", "crypto_LUKS > btrfs", 997 * gb, Some(870 * gb), "/", "Linux filesystem"),
     ];
     set_detail(&mut b, "d_path", "/dev/nvme0n1");
     set_detail(&mut b, "d_part_table", "GPT");
     ScanResult { disks: vec![a, b], needs_admin: false, message: None, passwordless: false }
+}
+
+/// Two months of made-up readings for the sample disks, so the History tab has something to draw.
+pub fn demo_history(disks: &[Disk]) -> crate::history::History {
+    let mut h = crate::history::History::default();
+    let now = crate::history::now();
+    let step = 6 * 3600;
+    let count = 60 * 4;
+    for (k, d) in disks.iter().enumerate() {
+        let mut list = Vec::new();
+        for i in 0..count {
+            let t = now - (count - i) as u64 * step;
+            // A slow weekly swing, like a computer used more on some days.
+            let wave = ((i as f32) / 28.0 * std::f32::consts::TAU).sin();
+            let base = if k == 0 { 36.0 } else { 40.0 };
+            list.push(crate::history::Sample {
+                t,
+                temp: Some((base + 4.0 * wave + (i % 7) as f32 * 0.3) as i32),
+                life: d.life.map(|l| (l + 1 - (i * 2 / count) as i32).min(100)),
+                written_gb: d.host_writes_gb.map(|w| w.saturating_sub(((count - i) * 12) as u64)),
+                reallocated: if k == 0 { Some(if i > count * 2 / 3 { 8 } else if i > count / 3 { 3 } else { 0 }) } else { None },
+                pending: if k == 0 { Some(0) } else { None },
+                health: if k == 0 && i > count / 3 { 2 } else { 1 },
+            });
+        }
+        h.disks.insert(d.key(), list);
+    }
+    h
 }

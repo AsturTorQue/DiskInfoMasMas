@@ -3,7 +3,9 @@
 
 mod demo;
 mod disks;
+mod alerts;
 mod health;
+mod history;
 mod parts;
 mod i18n;
 #[cfg(target_os = "linux")]
@@ -12,6 +14,7 @@ mod platform;
 #[cfg(target_os = "linux")]
 mod polkit;
 mod smartctl;
+mod speed;
 mod theme;
 
 use disks::{Disk, ScanResult, Status};
@@ -36,6 +39,8 @@ struct Settings {
     thresholds: HashMap<String, Thresholds>,
     /// Keep an entry (with icon) in the user's application menu.
     menu_entry: bool,
+    /// Desktop notifications when a disk gets worse or too hot.
+    alerts: bool,
 }
 
 impl Default for Settings {
@@ -48,6 +53,7 @@ impl Default for Settings {
             theme: Theme::Light,
             thresholds: HashMap::new(),
             menu_entry: true,
+            alerts: true,
         }
     }
 }
@@ -110,6 +116,16 @@ struct App {
     /// Which view is shown under the disk facts.
     tab: Tab,
     shot: Option<Shot>,
+    /// Screenshot and demo runs: no history saved, no notifications.
+    quiet: bool,
+    history: history::History,
+    speeds: speed::Speeds,
+    watcher: alerts::Watcher,
+    /// Which line the History tab draws.
+    metric: Metric,
+    show_selftest: bool,
+    /// Starting a self-test: (extended?, result).
+    selftest_task: Option<Receiver<(bool, Result<(), &'static str>)>>,
 }
 
 pub const APP_NAME: &str = "DiskInfo";
@@ -120,7 +136,16 @@ const AUTO_REFRESH_CHOICES: [u32; 8] = [0, 1, 3, 5, 10, 30, 60, 120];
 enum Tab {
     Smart,
     Partitions,
+    History,
     Details,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Metric {
+    Temperature,
+    Life,
+    Written,
+    BadSectors,
 }
 
 impl App {
@@ -151,10 +176,18 @@ impl App {
             show_pw: false,
             pw_task: None,
             tab: Tab::Smart,
+            quiet: demo || shot.is_some(),
+            history: if demo || shot.is_some() { history::History::default() } else { history::History::load() },
+            speeds: speed::start(),
+            watcher: alerts::Watcher::default(),
+            metric: Metric::Temperature,
+            show_selftest: false,
+            selftest_task: None,
             shot: shot.map(|path| Shot { path, frames: 0, requested: false }),
         };
         if demo {
             app.apply_scan(demo::demo_scan(), false);
+            app.history = demo::demo_history(&app.disks);
         } else if app.shot.is_some() {
             // Read synchronously so the picture shows real disks.
             let r = disks::scan(false);
@@ -204,6 +237,38 @@ impl App {
             .unwrap_or(0);
         self.reevaluate();
         self.last_refresh = Instant::now();
+        self.after_reading();
+    }
+
+    /// After every reading: keep history and announce disks that got worse or too hot.
+    /// Checks and demo runs (`quiet`) leave the person's history and desktop alone.
+    fn after_reading(&mut self) {
+        if self.quiet {
+            return;
+        }
+        let mut added = false;
+        for d in &self.disks {
+            added |= self.history.record(d);
+        }
+        if added {
+            self.history.save();
+        }
+        if !self.settings.alerts {
+            return;
+        }
+        let lang = self.settings.language;
+        for d in &self.disks {
+            let key = d.key();
+            if self.watcher.health_worse(&key, d.health) {
+                let body = format!("{} ({}): {}", d.model, d.place(), self.health_text(d));
+                alerts::notify(t(lang, "alert_health"), &body);
+            }
+            let th = self.settings.thresholds_for(d);
+            if self.watcher.too_hot(&key, d.temperature, th.alarm_temp) {
+                let body = format!("{} ({}): {}", d.model, d.place(), self.temp_text(d.temperature));
+                alerts::notify(t(lang, "alert_hot"), &body);
+            }
+        }
     }
 
     fn reevaluate(&mut self) {
@@ -223,6 +288,7 @@ impl App {
                 }
             }
             self.last_refresh = Instant::now();
+            self.after_reading();
         }
     }
 
@@ -473,7 +539,8 @@ impl eframe::App for App {
         if every > 0 && self.scanning.is_none() && self.last_refresh.elapsed() >= Duration::from_secs(every as u64 * 60) {
             self.auto_refresh();
         }
-        ctx.request_repaint_after(Duration::from_secs(5));
+        // Once a second: live speed, and alerts keep working while the window is in the background.
+        ctx.request_repaint_after(Duration::from_secs(1));
         if ctx.input(|i| i.key_pressed(egui::Key::F5)) {
             self.refresh();
         }
@@ -527,6 +594,14 @@ impl eframe::App for App {
                     if cfg!(target_os = "linux") && ui.button(self.tr("pw_menu")).clicked() {
                         self.show_pw = true;
                         ui.close_menu();
+                    }
+                    if ui.button(self.tr("selftest_menu")).clicked() {
+                        self.show_selftest = true;
+                        ui.close_menu();
+                    }
+                    let label = self.tr("alerts_menu");
+                    if ui.checkbox(&mut self.settings.alerts, label).changed() {
+                        self.settings.save();
                     }
                     if ui.button(self.tr("thresholds_menu")).clicked() {
                         if let Some(d) = self.disks.get(self.selected) {
@@ -662,6 +737,25 @@ impl eframe::App for App {
             let th = self.settings.thresholds_for(&d);
             ui.vertical_centered(|ui| {
                 ui.label(RichText::new(format!("{} {}", d.model, self.size_text(d.size_bytes))).size(20.0).strong());
+                // Live activity, refreshed every second.
+                let sp = self.speeds.lock().ok().and_then(|m| m.get(&speed::key_for(&d)).copied());
+                let rate = |b: Option<f64>| match b {
+                    Some(v) => format!("{}/s", self.bytes_text(v as u64)),
+                    None => "—".into(),
+                };
+                let line = match sp {
+                    Some(s) if s.total.is_some() => format!("{}: {}", self.tr("activity"), rate(s.total)),
+                    Some(s) => format!(
+                        "{}:  {} {}   ·   {} {}",
+                        self.tr("activity"),
+                        self.tr("act_read"),
+                        rate(s.read),
+                        self.tr("act_write"),
+                        rate(s.write)
+                    ),
+                    None => format!("{}: —", self.tr("activity")),
+                };
+                ui.label(RichText::new(line).color(pal.muted)).on_hover_text(self.tr("h_activity"));
             });
             ui.add_space(6.0);
 
@@ -739,7 +833,12 @@ impl eframe::App for App {
 
             // Tabs: S.M.A.R.T. / Partitions / Details.
             ui.horizontal(|ui| {
-                for (tab, key) in [(Tab::Smart, "tab_smart"), (Tab::Partitions, "tab_parts"), (Tab::Details, "tab_details")] {
+                for (tab, key) in [
+                    (Tab::Smart, "tab_smart"),
+                    (Tab::Partitions, "tab_parts"),
+                    (Tab::History, "tab_history"),
+                    (Tab::Details, "tab_details"),
+                ] {
                     let label = match tab {
                         Tab::Partitions => format!("{} ({})", self.tr(key), d.partitions.len()),
                         _ => self.tr(key).to_string(),
@@ -759,6 +858,7 @@ impl eframe::App for App {
                     egui::ScrollArea::both().auto_shrink([false, false]).show(ui, |ui| match self.tab {
                         Tab::Smart => self.smart_table(ui, &d, &pal),
                         Tab::Partitions => self.partitions_view(ui, &d, &pal),
+                        Tab::History => self.history_view(ui, &d, &pal),
                         Tab::Details => self.details_view(ui, &d),
                     });
                 });
@@ -863,6 +963,101 @@ impl eframe::App for App {
             }
             #[cfg(not(target_os = "linux"))]
             let _ = action;
+        }
+
+        // Result of starting a self-test.
+        if let Some(rx) = &self.selftest_task {
+            if let Ok((_, res)) = rx.try_recv() {
+                self.selftest_task = None;
+                match res {
+                    Ok(()) => {
+                        self.toast = Some(("msg_test_started", Instant::now()));
+                        self.message = None;
+                        self.refresh();
+                    }
+                    Err(e) => self.message = Some(e),
+                }
+            } else {
+                ctx.request_repaint_after(Duration::from_millis(100));
+            }
+        }
+
+        if self.show_selftest && !self.disks.is_empty() {
+            let lang = self.settings.language;
+            let d = self.disks[self.selected.min(self.disks.len() - 1)].clone();
+            let busy = self.selftest_task.is_some();
+            let mut start: Option<bool> = None;
+            let mut refresh = false;
+            let pal = self.pal();
+            egui::Window::new(t(lang, "selftest_menu").trim_end_matches('…'))
+                .open(&mut self.show_selftest)
+                .resizable(false)
+                .collapsible(false)
+                .default_width(480.0)
+                .show(ctx, |ui| {
+                    ui.label(RichText::new(format!("{} ({})", d.model, d.place())).strong());
+                    ui.label(t(lang, "st_explain"));
+                    ui.add_space(6.0);
+                    let st = &d.selftest;
+                    if !d.smart_read {
+                        ui.label(RichText::new(t(lang, "st_need_read")).color(pal.error));
+                    } else if !st.supported {
+                        ui.label(RichText::new(t(lang, "st_unsupported")).color(pal.muted));
+                    }
+                    if let Some(done) = st.running {
+                        ui.add(egui::ProgressBar::new(done as f32 / 100.0).text(format!("{} {done} %", t(lang, "st_running"))));
+                    }
+                    if !st.status.is_empty() {
+                        ui.label(format!("{}: {}", t(lang, "st_now"), st.status));
+                    }
+                    let mins = |m: Option<u64>| m.map(|m| format!(" (~{m} min)")).unwrap_or_default();
+                    ui.horizontal(|ui| {
+                        let can = !busy && st.running.is_none() && d.smart_read;
+                        if ui.add_enabled(can, egui::Button::new(format!("{}{}", t(lang, "st_short"), mins(st.short_min)))).clicked() {
+                            start = Some(false);
+                        }
+                        if ui.add_enabled(can, egui::Button::new(format!("{}{}", t(lang, "st_long"), mins(st.long_min)))).clicked() {
+                            start = Some(true);
+                        }
+                        if ui.button(t(lang, "st_check")).clicked() {
+                            refresh = true;
+                        }
+                        if busy {
+                            ui.spinner();
+                        }
+                    });
+                    ui.add_space(6.0);
+                    ui.label(RichText::new(t(lang, "st_log")).strong());
+                    if st.log.is_empty() {
+                        ui.label(RichText::new(t(lang, "st_log_empty")).italics().color(pal.muted));
+                    } else {
+                        egui::ScrollArea::vertical().max_height(180.0).show(ui, |ui| {
+                            egui::Grid::new("selftest_log").striped(true).num_columns(3).spacing([12.0, 2.0]).show(ui, |ui| {
+                                ui.label(RichText::new(t(lang, "col_type")).strong());
+                                ui.label(RichText::new(t(lang, "st_result")).strong());
+                                ui.label(RichText::new(t(lang, "power_on_hours")).strong());
+                                ui.end_row();
+                                for (kind, result, hours) in &st.log {
+                                    ui.label(kind);
+                                    let bad = !(result.contains("without error") || result.contains("Completed: no error") || result.is_empty());
+                                    ui.label(RichText::new(result).color(if bad { pal.bad } else { pal.text }));
+                                    ui.label(hours.map(|h| h.to_string()).unwrap_or_default());
+                                    ui.end_row();
+                                }
+                            });
+                        });
+                    }
+                });
+            if refresh {
+                self.refresh();
+            }
+            if let Some(extended) = start {
+                let (tx, rx) = channel();
+                std::thread::spawn(move || {
+                    let _ = tx.send((extended, disks::start_selftest(&d, extended)));
+                });
+                self.selftest_task = Some(rx);
+            }
         }
 
         if self.show_about {
@@ -1042,9 +1237,9 @@ impl App {
         ui.add_space(6.0);
 
         // Table.
-        egui::Grid::new("parts").striped(true).num_columns(9).spacing([7.0, 2.0]).min_row_height(ROW).show(ui, |ui| {
+        egui::Grid::new("parts").striped(true).num_columns(10).spacing([7.0, 2.0]).min_row_height(ROW).show(ui, |ui| {
             ui.label("");
-            for key in ["col_part", "col_label", "col_fs", "col_size", "col_usage", "col_free", "col_mount", "col_type"] {
+            for key in ["col_part", "col_label", "col_fs", "col_size", "col_usage", "col_free", "col_mount", "col_state", "col_type"] {
                 ui.label(RichText::new(self.tr(key)).strong());
             }
             ui.end_row();
@@ -1092,6 +1287,10 @@ impl App {
                 let tip = if p.mounts.is_empty() { self.tr("h_mounts").to_string() } else { p.mounts.join("\n") };
                 ui.label(mounts).on_hover_text(tip);
                 let kind = if p.uuid.is_empty() { p.kind.clone() } else { format!("{}\nUUID {}", p.kind, p.uuid) };
+                // State: encryption, read-only, inodes, the system's verdict.
+                let (state, warn) = self.partition_state(p);
+                let color = if warn { pal.bad } else { pal.text };
+                ui.label(RichText::new(state).color(color)).on_hover_text(self.tr("h_part_state"));
                 ui.label(if p.kind.is_empty() { "—" } else { &p.kind }).on_hover_text(kind);
                 ui.end_row();
             }
@@ -1120,13 +1319,213 @@ impl App {
         if rows.len() <= 2 {
             ui.label(self.tr("no_details"));
         }
-        egui::Grid::new("details").striped(true).num_columns(2).spacing([16.0, 2.0]).min_row_height(ROW).show(ui, |ui| {
-            for (k, v) in rows {
-                ui.label(RichText::new(k).strong());
-                ui.add(egui::Label::new(RichText::new(v).monospace()).wrap());
-                ui.end_row();
+        let grid = |ui: &mut egui::Ui, id: &str, rows: Vec<(String, String)>| {
+            egui::Grid::new(id).striped(true).num_columns(2).spacing([16.0, 2.0]).min_row_height(ROW).show(ui, |ui| {
+                for (k, v) in rows {
+                    ui.label(RichText::new(k).strong());
+                    ui.add(egui::Label::new(RichText::new(v).monospace()).wrap());
+                    ui.end_row();
+                }
+            });
+        };
+        grid(ui, "details", rows);
+
+        // SSD life estimate.
+        if let Some(e) = history::estimate(d, self.history.samples(d)) {
+            ui.add_space(8.0);
+            ui.label(RichText::new(self.tr("est_title")).strong().size(15.0)).on_hover_text(self.tr("h_estimate"));
+            let tb = |v: f64| self.decimal(format!("{v:.1} TB"));
+            let mut est = vec![(self.tr("est_written").to_string(), tb(e.written_tb))];
+            if let (Some(total), Some(rem)) = (e.total_tb, e.remaining_tb) {
+                est.push((self.tr("est_total").into(), tb(total)));
+                est.push((self.tr("est_remaining").into(), tb(rem)));
+            } else {
+                est.push((self.tr("est_total").into(), self.tr("est_no_wear").into()));
+            }
+            match (e.gb_per_day, e.days_left) {
+                (Some(per_day), Some(days)) => {
+                    est.push((self.tr("est_pace").into(), self.decimal(format!("{per_day:.1} GB/{}", self.tr("unit_day")))));
+                    let years = days / 365.25;
+                    let when = if years > 50.0 {
+                        self.tr("est_more_50").to_string()
+                    } else {
+                        let year = 1970.0 + (history::now() as f64 / 86_400.0 + days) / 365.25;
+                        format!("{} ({} {:.0})", self.decimal(format!("{years:.1}")), self.tr("est_around"), year.floor())
+                    };
+                    est.push((self.tr("est_years_left").into(), when));
+                }
+                _ => est.push((self.tr("est_years_left").into(), self.tr("est_need_history").into())),
+            }
+            grid(ui, "estimate", est);
+        }
+
+        // Facts the disk names itself, by group.
+        for group in ["x_temps", "x_power", "x_errors", "x_phy", "x_devstat"] {
+            let rows: Vec<(String, String)> = d
+                .extra
+                .iter()
+                .filter(|(g, _, _)| *g == group)
+                .map(|(_, n, v)| (self.extra_name(n), self.value_text(v)))
+                .collect();
+            if rows.is_empty() {
+                continue;
+            }
+            ui.add_space(8.0);
+            ui.label(RichText::new(self.tr(group)).strong().size(15.0));
+            grid(ui, group, rows);
+        }
+    }
+
+    /// "x_sensor:2" → "Sensor 2"; other "x_" names are text keys; anything else is shown as is.
+    fn extra_name(&self, n: &str) -> String {
+        let (key, rest) = n.split_once(':').unwrap_or((n, ""));
+        let known = i18n::has(key);
+        match (known, rest.is_empty()) {
+            (true, true) => i18n::t_dyn(self.settings.language, key).to_string(),
+            (true, false) => format!("{} {rest}", i18n::t_dyn(self.settings.language, key)),
+            _ => n.to_string(),
+        }
+    }
+
+    /// "12.5" → "12,5" in languages with a decimal comma.
+    fn decimal(&self, s: String) -> String {
+        if self.settings.language.decimal_comma() {
+            s.replace('.', ",")
+        } else {
+            s
+        }
+    }
+
+    /// Short state of a partition and whether it needs attention.
+    fn partition_state(&self, p: &parts::Partition) -> (String, bool) {
+        let mut items = Vec::new();
+        let mut warn = false;
+        if !p.encryption.is_empty() {
+            items.push(format!("{} ({})", self.tr("st_encrypted"), p.encryption));
+        }
+        if p.read_only {
+            items.push(self.tr("st_read_only").to_string());
+        }
+        if let Some(f) = p.inodes_used.filter(|f| *f >= 0.8) {
+            items.push(format!("{} {:.0} %", self.tr("st_inodes"), f * 100.0));
+            warn = true;
+        }
+        if p.used_fraction().is_some_and(|f| f > 0.95) {
+            items.push(self.tr("st_almost_full").to_string());
+            warn = true;
+        }
+        if !p.health.is_empty() && p.health != "Healthy" && p.health != "0" {
+            items.push(p.health.clone());
+            warn = true;
+        }
+        if items.is_empty() {
+            (if p.mounts.is_empty() { "—".into() } else { "OK".into() }, false)
+        } else {
+            (items.join(" · "), warn)
+        }
+    }
+
+    /// A line graph of the chosen measure over the recorded history.
+    fn history_view(&mut self, ui: &mut egui::Ui, d: &Disk, pal: &Palette) {
+        ui.horizontal(|ui| {
+            for (m, key) in [
+                (Metric::Temperature, "temperature"),
+                (Metric::Life, "m_life"),
+                (Metric::Written, "host_writes"),
+                (Metric::BadSectors, "m_bad"),
+            ] {
+                if ui.selectable_label(self.metric == m, self.tr(key)).clicked() {
+                    self.metric = m;
+                }
             }
         });
+        let samples = self.history.samples(d);
+        let points: Vec<(u64, f64)> = samples
+            .iter()
+            .filter_map(|s| {
+                let v = match self.metric {
+                    Metric::Temperature => s.temp.map(|t| t as f64),
+                    Metric::Life => s.life.map(|l| l as f64),
+                    Metric::Written => s.written_gb.map(|w| w as f64),
+                    Metric::BadSectors => match (s.reallocated, s.pending) {
+                        (None, None) => None,
+                        (r, p) => Some((r.unwrap_or(0) + p.unwrap_or(0)) as f64),
+                    },
+                }?;
+                Some((s.t, v))
+            })
+            .collect();
+        if points.len() < 2 {
+            ui.add_space(6.0);
+            ui.label(RichText::new(self.tr("hist_empty")).italics().color(pal.muted));
+            return;
+        }
+        let (t0, t1) = (points[0].0, points[points.len() - 1].0.max(points[0].0 + 1));
+        let (mut lo, mut hi) = points.iter().fold((f64::MAX, f64::MIN), |(a, b), (_, v)| (a.min(*v), b.max(*v)));
+        if self.metric == Metric::Life {
+            hi = 100.0;
+            lo = lo.min(90.0).max(0.0);
+        }
+        if (hi - lo).abs() < 1.0 {
+            hi += 1.0;
+            lo -= 1.0;
+        }
+        let pad = (hi - lo) * 0.08;
+        let (lo, hi) = (lo - pad, hi + pad);
+
+        let size = Vec2::new(ui.available_width() - 8.0, (ui.available_height() - 30.0).max(160.0));
+        let (rect, resp) = ui.allocate_exact_size(size, egui::Sense::hover());
+        let plot = egui::Rect::from_min_max(rect.min + Vec2::new(48.0, 6.0), rect.max - Vec2::new(8.0, 22.0));
+        let painter = ui.painter_at(rect);
+        let x_of = |t: u64| plot.min.x + (t - t0) as f32 / (t1 - t0) as f32 * plot.width();
+        let y_of = |v: f64| plot.max.y - ((v - lo) / (hi - lo)) as f32 * plot.height();
+        let font = egui::FontId::proportional(10.5);
+        // Grid with values on the left and dates underneath.
+        for i in 0..=4 {
+            let v = lo + (hi - lo) * i as f64 / 4.0;
+            let y = y_of(v);
+            painter.line_segment([egui::pos2(plot.min.x, y), egui::pos2(plot.max.x, y)], egui::Stroke::new(1.0_f32, pal.stripe));
+            painter.text(egui::pos2(plot.min.x - 4.0, y), egui::Align2::RIGHT_CENTER, format!("{v:.0}"), font.clone(), pal.muted);
+        }
+        for i in 0..=4 {
+            let t = t0 + (t1 - t0) * i / 4;
+            let x = x_of(t);
+            painter.line_segment([egui::pos2(x, plot.min.y), egui::pos2(x, plot.max.y)], egui::Stroke::new(1.0_f32, pal.stripe));
+            let align = match i {
+                0 => egui::Align2::LEFT_TOP,
+                4 => egui::Align2::RIGHT_TOP,
+                _ => egui::Align2::CENTER_TOP,
+            };
+            painter.text(egui::pos2(x, plot.max.y + 4.0), align, date_text(t), font.clone(), pal.muted);
+        }
+        painter.rect_stroke(plot, 0.0, egui::Stroke::new(1.0_f32, pal.stroke), egui::StrokeKind::Inside);
+        // Alarm line for temperature.
+        if self.metric == Metric::Temperature {
+            let alarm = self.settings.thresholds_for(d).alarm_temp as f64;
+            if alarm > lo && alarm < hi {
+                let y = y_of(alarm);
+                painter.line_segment([egui::pos2(plot.min.x, y), egui::pos2(plot.max.x, y)], egui::Stroke::new(1.0_f32, pal.bad));
+            }
+        }
+        let line: Vec<egui::Pos2> = points.iter().map(|(t, v)| egui::pos2(x_of(*t), y_of(*v))).collect();
+        painter.add(egui::Shape::line(line.clone(), egui::Stroke::new(2.0_f32, pal.accent)));
+        // Value under the pointer.
+        if let Some(pos) = resp.hover_pos() {
+            if let Some((i, p)) = line.iter().enumerate().min_by(|a, b| (a.1.x - pos.x).abs().total_cmp(&(b.1.x - pos.x).abs())) {
+                painter.circle_filled(*p, 4.0, pal.accent);
+                let (t, v) = points[i];
+                let unit = match self.metric {
+                    Metric::Temperature => " °C",
+                    Metric::Life => " %",
+                    Metric::Written => " GB",
+                    Metric::BadSectors => "",
+                };
+                resp.on_hover_text(format!("{}\n{v:.0}{unit}", date_time_text(t)));
+            }
+        }
+        ui.label(
+            RichText::new(format!("{} {} · {}", points.len(), self.tr("hist_points"), self.tr("hist_note"))).color(pal.muted),
+        );
     }
 
     fn screenshot_step(&mut self, ctx: &egui::Context) {
@@ -1157,6 +1556,34 @@ impl App {
     }
 }
 
+/// (year, month, day, hour, minute) in UTC from seconds since 1970 (civil-from-days algorithm).
+fn civil(t: u64) -> (i64, u32, u32, u32, u32) {
+    let days = (t / 86_400) as i64;
+    let secs = t % 86_400;
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = (doy - (153 * mp + 2) / 5 + 1) as u32;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 } as u32;
+    let year = yoe + era * 400 + if month <= 2 { 1 } else { 0 };
+    (year, month, day, (secs / 3600) as u32, ((secs % 3600) / 60) as u32)
+}
+
+/// "19/11" for graph labels.
+fn date_text(t: u64) -> String {
+    let (_, m, d, _, _) = civil(t);
+    format!("{d:02}/{m:02}")
+}
+
+/// "19/11/2026 14:05 UTC" for the value under the pointer.
+fn date_time_text(t: u64) -> String {
+    let (y, m, d, h, min) = civil(t);
+    format!("{d:02}/{m:02}/{y} {h:02}:{min:02} UTC")
+}
+
 /// The program icon, built into the program.
 fn window_icon() -> Option<egui::IconData> {
     let img = image::load_from_memory(include_bytes!("../packaging/diskinfo.png")).ok()?.into_rgba8();
@@ -1174,6 +1601,7 @@ fn main() -> eframe::Result<()> {
     // --demo shows two sample disks with S.M.A.R.T. data (for checking the layout).
     let demo = args.iter().any(|a| a == "--demo");
     let tab = arg_value(&args, "--tab");
+    let disk: Option<usize> = arg_value(&args, "--disk").and_then(|v| v.parse().ok());
     // Keep the application-menu entry current (it gives the window its icon on Wayland).
     // Checks (--screenshot) and --demo runs leave the user's files alone.
     #[cfg(target_os = "linux")]
@@ -1224,10 +1652,15 @@ fn main() -> eframe::Result<()> {
         options,
         Box::new(move |_cc| {
             let mut app = App::new(shot, lang, theme, demo);
+            // --disk N shows the Nth disk first (counting from 1).
+            if let Some(n) = disk.and_then(|n| n.checked_sub(1)) {
+                app.selected = n.min(app.disks.len().saturating_sub(1));
+            }
             // --tab parts|details opens on that tab (handy for checking the layout).
             app.tab = match tab.as_deref() {
                 Some("parts") => Tab::Partitions,
                 Some("details") => Tab::Details,
+                Some("history") => Tab::History,
                 _ => Tab::Smart,
             };
             Ok(Box::new(app))

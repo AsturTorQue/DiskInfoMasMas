@@ -10,7 +10,7 @@ pub struct Partition {
     /// "sda1", "C:", "disk0s2"...
     pub name: String,
     pub label: String,
-    /// File system ("ext4", "NTFS", "APFS"); "crypto_LUKS → btrfs" when layered.
+    /// File system ("ext4", "NTFS", "APFS"); "crypto_LUKS > btrfs" when layered.
     pub fs: String,
     pub size: u64,
     pub used: Option<u64>,
@@ -19,6 +19,14 @@ pub struct Partition {
     /// Partition type ("EFI System", "Microsoft basic data", "Linux filesystem").
     pub kind: String,
     pub uuid: String,
+    /// Encryption in use ("LUKS", "BitLocker", "FileVault"), empty when none was found.
+    pub encryption: String,
+    /// Mounted read-only (often a sign the file system found errors).
+    pub read_only: bool,
+    /// Share of file entries (inodes) used, 0..=1, on file systems that have a fixed number.
+    pub inodes_used: Option<f32>,
+    /// The system's own verdict on the volume ("Healthy", "Warning"...), when it gives one.
+    pub health: String,
 }
 
 impl Partition {
@@ -106,8 +114,58 @@ pub fn from_lsblk(d: &mut Disk, node: &Value) {
                 None => break,
             }
         }
-        p.fs = layers.join(" → ");
+        if layers.iter().any(|l| l == "crypto_LUKS") {
+            p.encryption = "LUKS".into();
+        } else if layers.iter().any(|l| l.eq_ignore_ascii_case("BitLocker")) {
+            p.encryption = "BitLocker".into();
+        }
+        p.read_only = cur["ro"].as_bool().unwrap_or(false) || c["ro"].as_bool().unwrap_or(false);
+        p.fs = layers.join(" > ");
         d.partitions.push(p);
+    }
+    linux_mount_health(&mut d.partitions);
+}
+
+/// Read-only mounts (from /proc/mounts) and inode use (from `df -Pi`) of mounted partitions.
+#[cfg(target_os = "linux")]
+fn linux_mount_health(parts: &mut [Partition]) {
+    let mounts = std::fs::read_to_string("/proc/mounts").unwrap_or_default();
+    let ro: Vec<String> = mounts
+        .lines()
+        .filter_map(|l| {
+            let f: Vec<&str> = l.split_whitespace().collect();
+            let opts = f.get(3)?;
+            opts.split(',').any(|o| o == "ro").then(|| f[1].replace("\\040", " "))
+        })
+        .collect();
+    let targets: Vec<String> = parts.iter().flat_map(|p| p.mounts.iter().cloned()).collect();
+    if targets.is_empty() {
+        return;
+    }
+    let mut inodes = std::collections::HashMap::new();
+    if let Ok(o) = crate::platform::command("df").arg("-Pi").args(&targets).output() {
+        for line in String::from_utf8_lossy(&o.stdout).lines().skip(1) {
+            let f: Vec<&str> = line.split_whitespace().collect();
+            if f.len() < 6 {
+                continue;
+            }
+            // Filesystem Inodes IUsed IFree IUse% Mounted-on (the mount may contain spaces).
+            let total: u64 = f[1].parse().unwrap_or(0);
+            let used: u64 = f[2].parse().unwrap_or(0);
+            if total > 0 {
+                inodes.insert(f[5..].join(" "), used as f32 / total as f32);
+            }
+        }
+    }
+    for p in parts.iter_mut() {
+        // Immutable systems (Bazzite, Silverblue...) mount parts of a writable file system
+        // read-only on purpose, so only flag it when every mount of it is read-only.
+        if !p.mounts.is_empty() && p.mounts.iter().all(|m| ro.contains(m)) {
+            p.read_only = true;
+        } else if !p.mounts.is_empty() {
+            p.read_only = false;
+        }
+        p.inodes_used = p.mounts.iter().find_map(|m| inodes.get(m).copied());
     }
 }
 
@@ -129,7 +187,8 @@ $parts = @(Get-Partition | ForEach-Object { $v = $null; try { $v = $_ | Get-Volu
 [pscustomobject]@{ DiskNumber=$_.DiskNumber; PartitionNumber=$_.PartitionNumber; DriveLetter=[string]$_.DriveLetter; \
 Size=$_.Size; Type=[string]$_.Type; GptType=[string]$_.GptType; IsBoot=$_.IsBoot; IsSystem=$_.IsSystem; \
 FileSystem=$(if($v){$v.FileSystem}); Label=$(if($v){$v.FileSystemLabel}); Remaining=$(if($v){$v.SizeRemaining}); \
-VolumeSize=$(if($v){$v.Size}); AccessPaths=@($_.AccessPaths) } }); \
+VolumeSize=$(if($v){$v.Size}); AccessPaths=@($_.AccessPaths); Health=$(if($v){[string]$v.HealthStatus}); \
+BitLocker=$(if($_.DriveLetter){ try { (New-Object -ComObject Shell.Application).NameSpace(\"$($_.DriveLetter):\").Self.ExtendedProperty('System.Volume.BitLockerProtection') } catch { $null } }) } }); \
 $disks = @(Get-Disk | Select-Object Number,PartitionStyle,@{n='HealthStatus';e={[string]$_.HealthStatus}},@{n='OperationalStatus';e={[string]$_.OperationalStatus}},IsBoot,IsSystem,LogicalSectorSize,PhysicalSectorSize,UniqueId,Manufacturer,Location); \
 @{parts=$parts; disks=$disks} | ConvertTo-Json -Depth 4 -Compress";
 
@@ -192,6 +251,11 @@ pub fn apply_windows(d: &mut Disk, id: u64, j: &Value) {
             part.used = Some(total.saturating_sub(rem));
             part.free = Some(rem);
         }
+        part.health = s(&p["Health"]);
+        // System.Volume.BitLockerProtection: 1 on, 3 encrypting, 5 locked, 6 unlocked; 2 off.
+        if matches!(num(&p["BitLocker"]), Some(1 | 3 | 5 | 6)) {
+            part.encryption = "BitLocker".into();
+        }
         for a in p["AccessPaths"].as_array().into_iter().flatten() {
             if let Some(a) = a.as_str().filter(|a| !a.starts_with("\\\\?\\")) {
                 part.mounts.push(a.to_string());
@@ -234,6 +298,16 @@ pub fn from_diskutil(d: &mut Disk) {
                 ..Default::default()
             };
             let mount = text(p, "MountPoint");
+            // FileVault and write access, per volume.
+            if let Ok(o) = crate::platform::command("diskutil").args(["info", "-plist", &part.name]).output() {
+                if let Some(info) = plist::Value::from_reader_xml(&o.stdout[..]).ok().and_then(|v| v.into_dictionary()) {
+                    let flag = |k: &str| info.get(k).and_then(|v| v.as_boolean());
+                    if flag("FileVault") == Some(true) || flag("Encryption") == Some(true) {
+                        part.encryption = "FileVault".into();
+                    }
+                    part.read_only = flag("WritableVolume") == Some(false) && !mount.is_empty();
+                }
+            }
             if !mount.is_empty() {
                 part.mounts.push(mount.clone());
                 if let Some((used, free)) = df_usage(&mount) {

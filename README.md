@@ -47,6 +47,18 @@ When the system already has `smartctl`, that one is used.
 - **Details** tab: exact capacity, device path, model family, WWN, sector sizes, form factor,
   S.M.A.R.T. self-assessment, last self-test, logged errors, NVMe controller facts, Windows'
   own health/boot/system flags and more, whatever the system reports.
+- **History** tab: graphs of temperature, life left, data written and bad sectors over time
+  (a reading every 10 minutes while the app is open, kept in the settings folder).
+- **SSD life estimate** (Details tab): data written so far, estimated total it can take, what is
+  left and, after a week of history, roughly how many years at the current writing pace.
+- **Disk self-tests**: start the short or extended self-test (Function → Disk self-test…), follow
+  its progress and see earlier results.
+- **Desktop alerts** when a disk gets worse or reaches its temperature alarm (Function menu).
+- **Live activity**: current read and write speed of the disk shown.
+- **Extended facts** (`smartctl -x`): lifetime min/max temperatures, NVMe sensors and thresholds,
+  power states, write cache, SATA link errors, device statistics, error logs.
+- Partition **state**: encrypted (LUKS/BitLocker/FileVault), read-only, inodes running out,
+  almost full, and Windows' own volume health.
 - Adjustable warning thresholds per disk (reallocated / pending / uncorrectable sectors,
   SSD life, temperature alarm).
 - Auto refresh, copy a text report, Fahrenheit, green mode.

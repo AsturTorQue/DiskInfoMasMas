@@ -66,6 +66,25 @@ pub struct Disk {
     pub partitions: Vec<crate::parts::Partition>,
     /// Extra facts: (i18n key of the label, value). Values "yes"/"no" are translated.
     pub details: Vec<(&'static str, String)>,
+    /// Facts named by the disk itself, grouped: (i18n key of the group, name, value).
+    pub extra: Vec<(&'static str, String, String)>,
+    /// The disk's own self-test: what runs now and the log of earlier ones.
+    pub selftest: SelfTest,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct SelfTest {
+    /// Percent done of a test running now.
+    pub running: Option<u8>,
+    /// What the disk says about its self-test right now.
+    pub status: String,
+    /// Expected minutes for the short and extended tests (ATA).
+    pub short_min: Option<u64>,
+    pub long_min: Option<u64>,
+    /// Earlier tests, newest first: (kind, result, power-on hours).
+    pub log: Vec<(String, String, Option<u64>)>,
+    /// Whether the disk takes self-test commands.
+    pub supported: bool,
 }
 
 impl Disk {
@@ -110,7 +129,7 @@ pub fn list_disks() -> Vec<Disk> {
     const BASIC: &str = "NAME,MODEL,SERIAL,SIZE,ROTA,TRAN,TYPE,REV,MOUNTPOINTS";
     // Partition columns need util-linux 2.33 or later; older lsblk gets the basic list.
     const FULL: &str = "NAME,MODEL,SERIAL,SIZE,ROTA,TRAN,TYPE,REV,MOUNTPOINTS,FSTYPE,LABEL,UUID,FSUSED,FSAVAIL,\
-                        PARTTYPENAME,PARTLABEL,PTTYPE,WWN,LOG-SEC,PHY-SEC,RM,SCHED,VENDOR,HCTL";
+                        PARTTYPENAME,PARTLABEL,PTTYPE,WWN,LOG-SEC,PHY-SEC,RM,RO,SCHED,VENDOR,HCTL";
     let parse = |cols: &str| -> Option<Value> {
         let txt = run("lsblk", &["-J", "-b", "-o", cols])?;
         serde_json::from_str::<Value>(&txt).ok()
@@ -235,13 +254,13 @@ enum SmartRead {
     Failed,
 }
 
-/// Runs `smartctl -j -a` as this user.
+/// Runs `smartctl -j -x` (everything the disk reports) as this user.
 fn smartctl_read(path: &str, dtype: Option<&str>) -> SmartRead {
     let Some(smartctl) = crate::smartctl::for_user() else {
         return SmartRead::Missing;
     };
     let mut cmd = crate::platform::command(smartctl);
-    cmd.args(["-j", "-a"]);
+    cmd.args(["-j", "-x"]);
     if let Some(t) = dtype {
         cmd.args(["-d", t]);
     }
@@ -349,7 +368,7 @@ fn smartctl_admin(devs: &[String]) -> Result<Vec<(String, Value)>, &'static str>
     let trusted = crate::smartctl::trusted();
     let staged = if trusted.is_none() { crate::smartctl::stage_bundled() } else { None };
     let prelude = crate::smartctl::root_prelude(trusted.as_deref(), staged.as_ref()).ok_or("msg_no_smartctl")?;
-    let script = format!(r#"{prelude}; for d in "$@"; do echo "@@DEV $d"; "$SMARTCTL" -j -a "/dev/$d"; done"#);
+    let script = format!(r#"{prelude}; for d in "$@"; do echo "@@DEV $d"; "$SMARTCTL" -j -x "/dev/$d"; done"#);
     let out = Command::new("pkexec")
         .arg("/bin/sh")
         .arg("-c")
@@ -466,7 +485,7 @@ fn scan_devices(smartctl: &str) -> Vec<(String, Option<String>)> {
 fn mac_admin_read(smartctl: &str) -> Result<Vec<(String, Value)>, &'static str> {
     let q = crate::smartctl::shell_quote(smartctl);
     let script = format!(
-        "{q} --scan | while read n x t r; do echo \"@@DEV $n\"; {q} -j -a -d \"$t\" \"$n\"; done"
+        "{q} --scan | while read n x t r; do echo \"@@DEV $n\"; {q} -j -x -d \"$t\" \"$n\"; done"
     );
     let apple = format!(
         "do shell script \"{}\" with administrator privileges",
@@ -644,6 +663,195 @@ pub fn parse_smart(d: &mut Disk, j: &Value) {
     }
     d.smart_read = !d.attrs.is_empty();
     smart_details(d, j);
+    smart_extended(d, j);
+    smart_selftest(d, j);
+}
+
+/// Facts only `smartctl -x` gives: ATA device statistics, SCT temperatures, SATA link
+/// counters, APM/caches, NVMe temperature sensors, thresholds, power states, error log.
+fn smart_extended(d: &mut Disk, j: &Value) {
+    d.extra.clear();
+    let push = |d: &mut Disk, group: &'static str, name: String, value: String| {
+        if !value.is_empty() {
+            d.extra.push((group, name, value));
+        }
+    };
+    let on_off = |v: Option<bool>| v.map(|b| if b { "yes" } else { "no" }.to_string());
+    // ATA device statistics (lifetime writes, temperatures, errors...).
+    for page in j.pointer("/ata_device_statistics/pages").and_then(Value::as_array).into_iter().flatten() {
+        for e in page["table"].as_array().into_iter().flatten() {
+            let (Some(name), Some(v)) = (e["name"].as_str(), e.get("value")) else { continue };
+            if e.pointer("/flags/valid").and_then(Value::as_bool) == Some(false) {
+                continue;
+            }
+            push(d, "x_devstat", name.to_string(), v.to_string().trim_matches('"').to_string());
+        }
+    }
+    // SCT temperatures.
+    let t = |k: &str| j.pointer(&format!("/ata_sct_status/temperature/{k}")).and_then(Value::as_i64);
+    for (k, label) in [
+        ("lifetime_min", "x_temp_life_min"),
+        ("lifetime_max", "x_temp_life_max"),
+        ("power_cycle_min", "x_temp_cycle_min"),
+        ("power_cycle_max", "x_temp_cycle_max"),
+        ("op_limit_max", "x_temp_limit"),
+    ] {
+        if let Some(v) = t(k) {
+            push(d, "x_temps", label.to_string(), format!("{v} °C"));
+        }
+    }
+    // SATA link (PHY) event counters: cable or connector trouble shows here.
+    for e in j.pointer("/sata_phy_event_counters/table").and_then(Value::as_array).into_iter().flatten() {
+        if let (Some(name), Some(v)) = (e["name"].as_str(), e["value"].as_u64()) {
+            push(d, "x_phy", name.to_string(), v.to_string());
+        }
+    }
+    // Power management and caches.
+    if let Some(level) = j.pointer("/ata_apm/level").and_then(Value::as_u64) {
+        push(d, "x_power", "APM".into(), level.to_string());
+    } else if let Some(v) = on_off(j.pointer("/ata_apm/enabled").and_then(Value::as_bool)) {
+        push(d, "x_power", "APM".into(), v);
+    }
+    if let Some(level) = j.pointer("/ata_aam/level").and_then(Value::as_u64) {
+        push(d, "x_power", "AAM".into(), level.to_string());
+    }
+    if let Some(v) = on_off(j.pointer("/write_cache/enabled").and_then(Value::as_bool)) {
+        push(d, "x_power", "x_write_cache".into(), v);
+    }
+    if let Some(v) = on_off(j.pointer("/read_lookahead/enabled").and_then(Value::as_bool)) {
+        push(d, "x_power", "x_lookahead".into(), v);
+    }
+    // NVMe temperature sensors and thresholds (some drives report Kelvin).
+    let celsius = |v: i64| if v > 200 { v - 273 } else { v };
+    let log = &j["nvme_smart_health_information_log"];
+    for (i, s) in log["temperature_sensors"].as_array().into_iter().flatten().enumerate() {
+        if let Some(v) = s.as_i64() {
+            push(d, "x_temps", format!("x_sensor:{}", i + 1), format!("{} °C", celsius(v)));
+        }
+    }
+    for (k, label) in [("warning", "x_temp_warning"), ("critical", "x_temp_critical")] {
+        if let Some(v) = j.pointer(&format!("/nvme_composite_temperature_threshold/{k}")).and_then(Value::as_i64) {
+            push(d, "x_temps", label.to_string(), format!("{} °C", celsius(v)));
+        }
+    }
+    // NVMe power states: maximum power of each.
+    for (i, ps) in j["nvme_power_states"].as_array().into_iter().flatten().enumerate() {
+        let value = ps.pointer("/max_power/value").and_then(Value::as_f64);
+        let per_watt = ps.pointer("/max_power/units_per_watt").and_then(Value::as_f64).filter(|u| *u > 0.0);
+        let Some(v) = value else { continue };
+        let watts = per_watt.map(|u| v / u).unwrap_or(v / 100.0);
+        let idle = if ps["non_operational_state"].as_bool() == Some(true) { " (non-operational)" } else { "" };
+        push(d, "x_power", format!("PS{i}"), format!("{watts:.2} W{idle}"));
+    }
+    if let Some(unread) = j.pointer("/nvme_error_information_log/unread").and_then(Value::as_u64) {
+        push(d, "x_errors", "x_unread_errors".into(), unread.to_string());
+    }
+    if let Some(n) = j.pointer("/ata_smart_error_log/extended/count").and_then(Value::as_u64) {
+        push(d, "x_errors", "x_ata_errors".into(), n.to_string());
+    }
+}
+
+/// The disk's self-test status and log.
+fn smart_selftest(d: &mut Disk, j: &Value) {
+    let mut st = SelfTest::default();
+    if let Some(s) = j.pointer("/ata_smart_data/self_test") {
+        st.supported = true;
+        st.status = s.pointer("/status/string").and_then(Value::as_str).unwrap_or("").to_string();
+        if let Some(rem) = s.pointer("/status/remaining_percent").and_then(Value::as_u64) {
+            st.running = Some((100 - rem.min(100)) as u8);
+        }
+        st.short_min = s.pointer("/polling_minutes/short").and_then(Value::as_u64);
+        st.long_min = s.pointer("/polling_minutes/extended").and_then(Value::as_u64);
+    }
+    if let Some(log) = j.get("nvme_self_test_log") {
+        st.supported = true;
+        let op = log.pointer("/current_self_test_operation/value").and_then(Value::as_u64).unwrap_or(0);
+        st.status = log.pointer("/current_self_test_operation/string").and_then(Value::as_str).unwrap_or("").to_string();
+        if op != 0 {
+            st.running = log["current_self_test_completion_percent"].as_u64().map(|p| p.min(100) as u8).or(Some(0));
+        }
+    }
+    let ata = j.pointer("/ata_smart_self_test_log/standard/table").and_then(Value::as_array);
+    for t in ata.into_iter().flatten() {
+        st.log.push((
+            t.pointer("/type/string").and_then(Value::as_str).unwrap_or("").to_string(),
+            t.pointer("/status/string").and_then(Value::as_str).unwrap_or("").to_string(),
+            t["lifetime_hours"].as_u64(),
+        ));
+    }
+    for t in j.pointer("/nvme_self_test_log/table").and_then(Value::as_array).into_iter().flatten() {
+        st.log.push((
+            t.pointer("/self_test_code/string").and_then(Value::as_str).unwrap_or("").to_string(),
+            t.pointer("/self_test_result/string").and_then(Value::as_str).unwrap_or("").to_string(),
+            t["power_on_hours"].as_u64(),
+        ));
+    }
+    if j.pointer("/ata_smart_data/capabilities/self_tests_supported").and_then(Value::as_bool) == Some(true) {
+        st.supported = true;
+    }
+    d.selftest = st;
+}
+
+/// Starts the disk's short or extended self-test. It runs inside the disk; results show up in
+/// later reads. Needs administrator rights (one password prompt on Linux and macOS).
+pub fn start_selftest(d: &Disk, extended: bool) -> Result<(), &'static str> {
+    let kind = if extended { "long" } else { "short" };
+    #[cfg(target_os = "linux")]
+    {
+        if !d.dev.chars().all(|c| c.is_ascii_alphanumeric()) {
+            return Err("msg_test_failed");
+        }
+        let trusted = crate::smartctl::trusted();
+        let staged = if trusted.is_none() { crate::smartctl::stage_bundled() } else { None };
+        let prelude = crate::smartctl::root_prelude(trusted.as_deref(), staged.as_ref()).ok_or("msg_no_smartctl")?;
+        let script = format!(r#"{prelude}; "$SMARTCTL" -t {kind} "/dev/$1""#);
+        let ok = Command::new("pkexec")
+            .args(["/bin/sh", "-c", &script, "sh", &d.dev])
+            .stdout(std::process::Stdio::null())
+            .status()
+            .map_err(|_| "msg_no_pkexec")?
+            .code();
+        // smartctl's exit code is a bit mask; bit 1/2 mean the command could not be sent.
+        return match ok {
+            Some(c) if c & 0b110 == 0 => Ok(()),
+            Some(126) | Some(127) => Err("msg_denied"),
+            _ => Err("msg_test_failed"),
+        };
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let smartctl = crate::smartctl::for_user().ok_or("msg_no_smartctl")?;
+        let q = crate::smartctl::shell_quote;
+        let script = format!("{} -t {kind} {}", q(&smartctl), q(&d.smart_dev));
+        let apple = format!(
+            "do shell script \"{}\" with administrator privileges",
+            script.replace('\\', "\\\\").replace('"', "\\\"")
+        );
+        let st = crate::platform::command("osascript").args(["-e", &apple]).status().map_err(|_| "msg_denied")?;
+        return if st.success() { Ok(()) } else { Err("msg_test_failed") };
+    }
+    #[cfg(windows)]
+    {
+        if !crate::platform::is_admin() {
+            return Err("msg_need_admin");
+        }
+        let smartctl = crate::smartctl::for_user().ok_or("msg_no_smartctl")?;
+        let mut cmd = crate::platform::command(smartctl);
+        cmd.args(["-t", kind]);
+        if let Some(t) = &d.smart_type {
+            cmd.args(["-d", t]);
+        }
+        let st = cmd.arg(&d.smart_dev).status().map_err(|_| "msg_test_failed")?;
+        return match st.code() {
+            Some(c) if c & 0b110 == 0 => Ok(()),
+            _ => Err("msg_test_failed"),
+        };
+    }
+    #[allow(unreachable_code)]
+    {
+        let _ = (d, kind);
+        Err("msg_test_failed")
+    }
 }
 
 /// Extra facts smartctl reports, for the Details tab.

@@ -22,26 +22,43 @@ fn user_name() -> Option<String> {
     ok.then_some(u)
 }
 
-/// The command line pkexec runs for one disk (also what the rule allows).
+/// The command line pkexec runs for one disk (also what the rule allows). `-x` reads more
+/// (device statistics, NVMe power states...); rules made by older versions only allow `-a`.
 pub fn read_args(smartctl: &str, dev: &str) -> [String; 4] {
-    [smartctl.to_string(), "-j".into(), "-a".into(), format!("/dev/{dev}")]
+    let mode = if rule_allows_extended() { "-x" } else { "-a" };
+    [smartctl.to_string(), "-j".into(), mode.into(), format!("/dev/{dev}")]
+}
+
+fn marker_text() -> Option<String> {
+    std::fs::read_to_string(MARKER_PATH)
+        .or_else(|_| std::fs::read_to_string(LEGACY_MARKER_PATH))
+        .ok()
+}
+
+/// Whether the installed rule also allows `smartctl -j -x` (rules from version 0.3 on).
+pub fn rule_allows_extended() -> bool {
+    marker_text().is_some_and(|t| t.contains("\" -j -x /dev/\""))
 }
 
 fn rule_text(user: &str, smartctl: &str) -> String {
     let js = |s: &str| serde_json::to_string(s).unwrap_or_else(|_| "\"\"".into());
     format!(
         r#"// Added by DiskInfo: lets {user} read disk health without a password.
-// Only allows "smartctl -j -a /dev/<disk>" (read-only). Remove this file to undo.
+// Only allows "smartctl -j -a /dev/<disk>" and "smartctl -j -x /dev/<disk>" (both only read).
+// Remove this file to undo.
 polkit.addRule(function(action, subject) {{
     if (action.id != "org.freedesktop.policykit.exec") return polkit.Result.NOT_HANDLED;
     var prog = {prog};
-    var prefix = prog + " -j -a /dev/";
     var cmd = action.lookup("command_line") || "";
-    if (action.lookup("program") == prog &&
-        subject.user == {user_js} && subject.local && subject.active &&
-        cmd.indexOf(prefix) == 0 &&
-        /^[A-Za-z0-9]+$/.test(cmd.substring(prefix.length))) {{
-        return polkit.Result.YES;
+    var modes = [" -j -a /dev/", " -j -x /dev/"];
+    if (action.lookup("program") != prog || subject.user != {user_js} || !subject.local || !subject.active) {{
+        return polkit.Result.NOT_HANDLED;
+    }}
+    for (var i = 0; i < modes.length; i++) {{
+        var prefix = prog + modes[i];
+        if (cmd.indexOf(prefix) == 0 && /^[A-Za-z0-9]+$/.test(cmd.substring(prefix.length))) {{
+            return polkit.Result.YES;
+        }}
     }}
     return polkit.Result.NOT_HANDLED;
 }});
@@ -61,11 +78,11 @@ pub fn rule_active(_sample_dev: &str) -> bool {
 /// still a root-owned program.
 pub fn rule_program() -> Option<String> {
     let user = user_name()?;
-    let text = std::fs::read_to_string(MARKER_PATH)
-        .or_else(|_| std::fs::read_to_string(LEGACY_MARKER_PATH))
-        .ok()?;
+    let text = marker_text()?;
     let js_user = serde_json::to_string(&user).ok()?;
-    if !text.contains(&format!("subject.user == {js_user}")) {
+    // Older rules say `subject.user == "name"`, newer ones `subject.user != "name"`.
+    let mine = text.contains(&format!("subject.user == {js_user}")) || text.contains(&format!("subject.user != {js_user}"));
+    if !mine {
         return None;
     }
     let line = text.lines().find_map(|l| l.trim().strip_prefix("var prog = "))?;
@@ -136,8 +153,9 @@ mod tests {
     fn rule_mentions_only_smartctl_read() {
         let r = rule_text("efren", "/usr/bin/smartctl");
         assert!(r.contains(r#"var prog = "/usr/bin/smartctl";"#));
-        assert!(r.contains(r#"subject.user == "efren""#));
-        assert!(r.contains(r#" -j -a /dev/"#));
+        assert!(r.contains(r#"subject.user != "efren""#));
+        assert!(r.contains(r#"" -j -a /dev/""#));
+        assert!(r.contains(r#"" -j -x /dev/""#));
     }
 }
 
