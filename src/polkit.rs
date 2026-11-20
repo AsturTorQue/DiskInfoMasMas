@@ -43,7 +43,7 @@ pub fn rule_allows_extended() -> bool {
 fn rule_text(user: &str, smartctl: &str) -> String {
     let js = |s: &str| serde_json::to_string(s).unwrap_or_else(|_| "\"\"".into());
     format!(
-        r#"// Added by DiskInfo: lets {user} read disk health without a password.
+        r#"// Added by DiskInfo++: lets {user} read disk health without a password.
 // Only allows "smartctl -j -a /dev/<disk>" and "smartctl -j -x /dev/<disk>" (both only read).
 // Remove this file to undo.
 polkit.addRule(function(action, subject) {{

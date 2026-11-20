@@ -1,4 +1,4 @@
-# Builds DiskInfo for Linux, Windows and macOS (Intel/AMD and ARM) and, for a version tag
+# Builds DiskInfo++ for Linux, Windows and macOS (Intel/AMD and ARM) and, for a version tag
 # (v1.2.3), attaches every package to that tag's GitHub release.
 # Run it by hand from the Actions tab too (workflow_dispatch): then the packages are only
 # kept as downloadable artifacts of the run.

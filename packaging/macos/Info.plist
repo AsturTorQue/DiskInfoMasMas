@@ -3,11 +3,11 @@
 <plist version="1.0">
 <dict>
     <key>CFBundleName</key>
-    <string>DiskInfo</string>
+    <string>DiskInfo++</string>
     <key>CFBundleDisplayName</key>
-    <string>DiskInfo</string>
+    <string>DiskInfo++</string>
     <key>CFBundleIdentifier</key>
-    <string>io.github.asturtorque.diskinfo</string>
+    <string>io.github.asturtorque.diskinfoplusplus</string>
     <key>CFBundleExecutable</key>
     <string>DiskInfo</string>
     <key>CFBundleIconFile</key>

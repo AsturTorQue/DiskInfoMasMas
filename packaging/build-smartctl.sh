@@ -1,5 +1,5 @@
 #!/bin/sh
-# Builds smartctl from the official smartmontools source, for bundling with DiskInfo.
+# Builds smartctl from the official smartmontools source, for bundling with DiskInfo++.
 #
 #   packaging/build-smartctl.sh                 -> target/smartctl      (this machine)
 #   packaging/build-smartctl.sh windows-x86_64  -> target/smartctl.exe  (needs mingw-w64)

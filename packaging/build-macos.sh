@@ -1,5 +1,5 @@
 #!/bin/sh
-# Builds dist/DiskInfo-macos-universal.zip: DiskInfo.app for Intel and Apple silicon Macs,
+# Builds dist/DiskInfoPlusPlus-macos-universal.zip: DiskInfo++.app for Intel and Apple silicon Macs,
 # with a bundled universal smartctl. Run on a Mac with Rust and the Xcode command line tools.
 set -eu
 cd "$(dirname "$0")/.."
@@ -10,7 +10,7 @@ MACOSX_DEPLOYMENT_TARGET=11.0 cargo build --release --target x86_64-apple-darwin
 MACOSX_DEPLOYMENT_TARGET=11.0 cargo build --release --target aarch64-apple-darwin
 packaging/build-smartctl.sh macos-universal
 
-APP="target/DiskInfo.app"
+APP="target/DiskInfo++.app"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 lipo -create -output "$APP/Contents/MacOS/DiskInfo" \
@@ -30,14 +30,14 @@ done
 iconutil -c icns "$ICONSET" -o "$APP/Contents/Resources/DiskInfo.icns"
 
 mkdir -p "$APP/Contents/Resources/licenses"
-cp LICENSE "$APP/Contents/Resources/licenses/LICENSE-DiskInfo.txt"
-cp LICENSE-CrystalDiskInfo.txt "$APP/Contents/Resources/licenses/"
+cp LICENSE "$APP/Contents/Resources/licenses/LICENSE-DiskInfoPlusPlus.txt"
+cp LICENSE-CrystalDiskInfo.txt CREDITS.md "$APP/Contents/Resources/licenses/"
 cp target/smartmontools-license/COPYING "$APP/Contents/Resources/licenses/COPYING-smartmontools.txt"
 
 # Ad-hoc signature: unsigned apps on Apple silicon must carry at least this one.
 codesign --force --deep --sign - "$APP"
 
 mkdir -p dist
-rm -f dist/DiskInfo-macos-universal.zip
-ditto -c -k --keepParent "$APP" dist/DiskInfo-macos-universal.zip
-echo "Built dist/DiskInfo-macos-universal.zip"
+rm -f dist/DiskInfoPlusPlus-macos-universal.zip
+ditto -c -k --keepParent "$APP" dist/DiskInfoPlusPlus-macos-universal.zip
+echo "Built dist/DiskInfoPlusPlus-macos-universal.zip"

@@ -129,7 +129,7 @@ struct App {
     selftest_task: Option<Receiver<(bool, Result<(), &'static str>)>>,
 }
 
-pub const APP_NAME: &str = "DiskInfo";
+pub const APP_NAME: &str = "DiskInfo++";
 
 const AUTO_REFRESH_CHOICES: [u32; 8] = [0, 1, 3, 5, 10, 30, 60, 120];
 

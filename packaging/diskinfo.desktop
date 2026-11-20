@@ -1,6 +1,6 @@
 [Desktop Entry]
 Type=Application
-Name=DiskInfo
+Name=DiskInfo++
 Comment=Disk health and temperature
 Comment[es]=Salud y temperatura de los discos
 Exec=diskinfo

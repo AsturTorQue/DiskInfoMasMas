@@ -1,7 +1,13 @@
-# DiskInfo
+# DiskInfo++
 
 Disk health (S.M.A.R.T.) and temperature for **Linux, Windows and macOS**, in the style of
 [CrystalDiskInfo](https://github.com/hiyohiyo/CrystalDiskInfo) by hiyohiyo.
+
+> **Credits.** DiskInfo++ exists thanks to **[CrystalDiskInfo](https://github.com/hiyohiyo/CrystalDiskInfo)**,
+> created by **hiyohiyo** (Noriyuki Miyazaki, [Crystal Dew World](https://crystalmark.info/)) and
+> released under the MIT License. Its health rules, layout and ideas are the model for this app.
+> DiskInfo++ is an independent rewrite in Rust and is not affiliated with or endorsed by the original
+> author. See [CREDITS.md](CREDITS.md).
 
 *Español más abajo.*
 
@@ -10,27 +16,27 @@ Disk health (S.M.A.R.T.) and temperature for **Linux, Windows and macOS**, in th
 ## Download
 
 Get the package for your system from the
-[Releases page](https://github.com/AsturTorQue/Diskinfo-for-linux/releases):
+[Releases page](https://github.com/AsturTorque/DiskInfoMasMas/releases):
 
 | System | Package |
 |--------|---------|
-| Linux, Intel/AMD 64-bit | `DiskInfo-linux-x86_64.AppImage` |
-| Linux, ARM 64-bit | `DiskInfo-linux-aarch64.AppImage` |
-| Windows, Intel/AMD 64-bit | `DiskInfo-windows-x64.zip` |
-| Windows on ARM | `DiskInfo-windows-arm64.zip` |
-| macOS 11+, Intel and Apple silicon | `DiskInfo-macos-universal.zip` |
+| Linux, Intel/AMD 64-bit | `DiskInfoPlusPlus-linux-x86_64.AppImage` |
+| Linux, ARM 64-bit | `DiskInfoPlusPlus-linux-aarch64.AppImage` |
+| Windows, Intel/AMD 64-bit | `DiskInfoPlusPlus-windows-x64.zip` |
+| Windows on ARM | `DiskInfoPlusPlus-windows-arm64.zip` |
+| macOS 11+, Intel and Apple silicon | `DiskInfoPlusPlus-macos-universal.zip` |
 
 Every package carries its own `smartctl` (smartmontools 7.5), so nothing else needs installing.
 When the system already has `smartctl`, that one is used.
 
 - **Linux:** make the AppImage executable (right click → Properties → *Is executable*, or
-  `chmod +x DiskInfo-linux-*.AppImage`) and open it. Works on immutable systems (Bazzite,
+  `chmod +x DiskInfoPlusPlus-linux-*.AppImage`) and open it. Works on immutable systems (Bazzite,
   Bluefin, Silverblue, Kinoite, SteamOS…) without `rpm-ostree`.
-- **Windows:** unzip and open `DiskInfo.exe` (keep `smartctl.exe` beside it). Reading disk
+- **Windows:** unzip and open `DiskInfo++.exe` (keep `smartctl.exe` beside it). Reading disk
   health needs administrator rights: press **Restart as administrator**.
-- **macOS:** unzip and move `DiskInfo.app` to Applications. The app isn't notarised by Apple, so
+- **macOS:** unzip and move `DiskInfo++.app` to Applications. The app isn't notarised by Apple, so
   the first time right click it → **Open** → **Open** (or run
-  `xattr -dr com.apple.quarantine /Applications/DiskInfo.app`). **Read S.M.A.R.T.** asks for your
+  `xattr -dr com.apple.quarantine /Applications/DiskInfo++.app`). **Read S.M.A.R.T.** asks for your
   password.
 
 ## Features
@@ -83,8 +89,8 @@ diskinfo help
 number. Add `--admin` (or run with `sudo`) to read S.M.A.R.T., `--json` for JSON from any command
 and `--lang es|en|pt|fr|de|it`. The exit code tells the worst health found: 0 good, 1 caution,
 2 bad, 3 unknown, so `diskinfo health --admin || notify-send "Disk problem"` works in a cron job.
-With the AppImage, call it the same way: `./DiskInfo-linux-x86_64.AppImage list`. On Windows run
-`DiskInfo.exe list` from a terminal opened as administrator.
+With the AppImage, call it the same way: `./DiskInfoPlusPlus-linux-x86_64.AppImage list`. On Windows run
+`DiskInfo++.exe list` from a terminal opened as administrator.
 
 ## Administrator rights
 
@@ -163,17 +169,17 @@ with each package.
 
 ## Español
 
-**DiskInfo** muestra la salud (S.M.A.R.T.) y la temperatura de tus discos en **Linux, Windows y
+**DiskInfo++** muestra la salud (S.M.A.R.T.) y la temperatura de tus discos en **Linux, Windows y
 macOS**, al estilo de CrystalDiskInfo de hiyohiyo. Descarga el paquete de tu sistema desde la
-página de versiones (Releases): <https://github.com/AsturTorQue/Diskinfo-for-linux/releases>
+página de versiones (Releases): <https://github.com/AsturTorque/DiskInfoMasMas/releases>
 
 - **Linux** (Intel/AMD y ARM): marca el AppImage como ejecutable (clic derecho → Propiedades →
   «Es ejecutable») y ábrelo. Funciona en sistemas inmutables (Bazzite, Silverblue…) sin
   `rpm-ostree`. La lectura pide la contraseña con `pkexec`, o actívala sin contraseña en
   **Función → Lectura sin contraseña…**.
-- **Windows** (x64 y ARM): descomprime y abre `DiskInfo.exe` (deja `smartctl.exe` al lado). Para
+- **Windows** (x64 y ARM): descomprime y abre `DiskInfo++.exe` (deja `smartctl.exe` al lado). Para
   ver la salud pulsa **Reiniciar como administrador**.
-- **macOS** (Intel y Apple silicon): descomprime y mueve `DiskInfo.app` a Aplicaciones. La primera
+- **macOS** (Intel y Apple silicon): descomprime y mueve `DiskInfo++.app` a Aplicaciones. La primera
   vez, clic derecho → **Abrir** → **Abrir**, porque no está firmada por Apple. **Leer S.M.A.R.T.**
   pide tu contraseña.
 
@@ -182,4 +188,10 @@ espacio usado y libre, montaje, tipo) y **Detalles** (capacidad exacta, WWN, sec
 autoprueba, errores registrados…) muestran más información de cada disco.
 
 Cada paquete incluye su propio `smartctl`, así que no hace falta instalar nada más.
-6 idiomas y 6 temas. Licencia MIT; basado en CrystalDiskInfo (MIT, © hiyohiyo).
+6 idiomas y 6 temas. También funciona desde la terminal (`diskinfo list`, `diskinfo help`).
+
+**Créditos:** DiskInfo++ existe gracias a **[CrystalDiskInfo](https://github.com/hiyohiyo/CrystalDiskInfo)**,
+creado por **hiyohiyo** (Noriyuki Miyazaki, Crystal Dew World) y publicado con licencia MIT. Sus
+reglas de salud, su diseño y sus ideas son el modelo de esta app. DiskInfo++ es una reescritura
+independiente en Rust, sin relación oficial con el autor original. Licencia MIT; ver
+[CREDITS.md](CREDITS.md).

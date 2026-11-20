@@ -1,5 +1,5 @@
 #!/bin/sh
-# Builds dist/DiskInfo-linux-<arch>.AppImage for this machine's architecture.
+# Builds dist/DiskInfoPlusPlus-linux-<arch>.AppImage for this machine's architecture.
 # Usage: packaging/build-appimage.sh [path/to/appimagetool]
 set -eu
 cd "$(dirname "$0")/.."
@@ -29,10 +29,10 @@ mkdir -p "$APPDIR/usr/share/icons/hicolor/256x256/apps"
 cp packaging/diskinfo.png "$APPDIR/usr/share/icons/hicolor/256x256/apps/"
 cp packaging/diskinfo.png "$APPDIR/.DirIcon"
 mkdir -p "$APPDIR/usr/share/doc/diskinfo"
-cp LICENSE-CrystalDiskInfo.txt "$APPDIR/usr/share/doc/diskinfo/"
+cp LICENSE-CrystalDiskInfo.txt CREDITS.md "$APPDIR/usr/share/doc/diskinfo/"
 
 ARCH="${ARCH:-$(uname -m)}"
-OUT="dist/DiskInfo-linux-${ARCH}.AppImage"
+OUT="dist/DiskInfoPlusPlus-linux-${ARCH}.AppImage"
 mkdir -p dist
 rm -f "$OUT"
 ARCH="$ARCH" "$TOOL" -n "$APPDIR" "$OUT"
