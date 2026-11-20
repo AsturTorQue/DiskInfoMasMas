@@ -7,7 +7,7 @@
     <key>CFBundleDisplayName</key>
     <string>DiskInfo++</string>
     <key>CFBundleIdentifier</key>
-    <string>io.github.asturtorque.diskinfoplusplus</string>
+    <string>io.github.asturtorque.diskinfomasmas</string>
     <key>CFBundleExecutable</key>
     <string>DiskInfo</string>
     <key>CFBundleIconFile</key>

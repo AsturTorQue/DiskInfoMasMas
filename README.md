@@ -20,17 +20,17 @@ Get the package for your system from the
 
 | System | Package |
 |--------|---------|
-| Linux, Intel/AMD 64-bit | `DiskInfoPlusPlus-linux-x86_64.AppImage` |
-| Linux, ARM 64-bit | `DiskInfoPlusPlus-linux-aarch64.AppImage` |
-| Windows, Intel/AMD 64-bit | `DiskInfoPlusPlus-windows-x64.zip` |
-| Windows on ARM | `DiskInfoPlusPlus-windows-arm64.zip` |
-| macOS 11+, Intel and Apple silicon | `DiskInfoPlusPlus-macos-universal.zip` |
+| Linux, Intel/AMD 64-bit | `DiskInfoMasMas-linux-x86_64.AppImage` |
+| Linux, ARM 64-bit | `DiskInfoMasMas-linux-aarch64.AppImage` |
+| Windows, Intel/AMD 64-bit | `DiskInfoMasMas-windows-x64.zip` |
+| Windows on ARM | `DiskInfoMasMas-windows-arm64.zip` |
+| macOS 11+, Intel and Apple silicon | `DiskInfoMasMas-macos-universal.zip` |
 
 Every package carries its own `smartctl` (smartmontools 7.5), so nothing else needs installing.
 When the system already has `smartctl`, that one is used.
 
 - **Linux:** make the AppImage executable (right click → Properties → *Is executable*, or
-  `chmod +x DiskInfoPlusPlus-linux-*.AppImage`) and open it. Works on immutable systems (Bazzite,
+  `chmod +x DiskInfoMasMas-linux-*.AppImage`) and open it. Works on immutable systems (Bazzite,
   Bluefin, Silverblue, Kinoite, SteamOS…) without `rpm-ostree`.
 - **Windows:** unzip and open `DiskInfo++.exe` (keep `smartctl.exe` beside it). Reading disk
   health needs administrator rights: press **Restart as administrator**.
@@ -89,7 +89,7 @@ diskinfo help
 number. Add `--admin` (or run with `sudo`) to read S.M.A.R.T., `--json` for JSON from any command
 and `--lang es|en|pt|fr|de|it`. The exit code tells the worst health found: 0 good, 1 caution,
 2 bad, 3 unknown, so `diskinfo health --admin || notify-send "Disk problem"` works in a cron job.
-With the AppImage, call it the same way: `./DiskInfoPlusPlus-linux-x86_64.AppImage list`. On Windows run
+With the AppImage, call it the same way: `./DiskInfoMasMas-linux-x86_64.AppImage list`. On Windows run
 `DiskInfo++.exe list` from a terminal opened as administrator.
 
 ## Administrator rights

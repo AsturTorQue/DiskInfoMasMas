@@ -1,5 +1,5 @@
 #!/bin/sh
-# Builds dist/DiskInfoPlusPlus-macos-universal.zip: DiskInfo++.app for Intel and Apple silicon Macs,
+# Builds dist/DiskInfoMasMas-macos-universal.zip: DiskInfo++.app for Intel and Apple silicon Macs,
 # with a bundled universal smartctl. Run on a Mac with Rust and the Xcode command line tools.
 set -eu
 cd "$(dirname "$0")/.."
@@ -30,7 +30,7 @@ done
 iconutil -c icns "$ICONSET" -o "$APP/Contents/Resources/DiskInfo.icns"
 
 mkdir -p "$APP/Contents/Resources/licenses"
-cp LICENSE "$APP/Contents/Resources/licenses/LICENSE-DiskInfoPlusPlus.txt"
+cp LICENSE "$APP/Contents/Resources/licenses/LICENSE-DiskInfoMasMas.txt"
 cp LICENSE-CrystalDiskInfo.txt CREDITS.md "$APP/Contents/Resources/licenses/"
 cp target/smartmontools-license/COPYING "$APP/Contents/Resources/licenses/COPYING-smartmontools.txt"
 
@@ -38,6 +38,6 @@ cp target/smartmontools-license/COPYING "$APP/Contents/Resources/licenses/COPYIN
 codesign --force --deep --sign - "$APP"
 
 mkdir -p dist
-rm -f dist/DiskInfoPlusPlus-macos-universal.zip
-ditto -c -k --keepParent "$APP" dist/DiskInfoPlusPlus-macos-universal.zip
-echo "Built dist/DiskInfoPlusPlus-macos-universal.zip"
+rm -f dist/DiskInfoMasMas-macos-universal.zip
+ditto -c -k --keepParent "$APP" dist/DiskInfoMasMas-macos-universal.zip
+echo "Built dist/DiskInfoMasMas-macos-universal.zip"
