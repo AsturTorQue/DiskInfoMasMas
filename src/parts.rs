@@ -27,6 +27,26 @@ pub struct Partition {
     pub inodes_used: Option<f32>,
     /// The system's own verdict on the volume ("Healthy", "Warning"...), when it gives one.
     pub health: String,
+    /// What lives inside: btrfs subvolumes, ZFS datasets, LUKS/LVM/RAID devices.
+    pub subs: Vec<SubVolume>,
+}
+
+/// Something inside a partition: a btrfs subvolume, a ZFS dataset, or a device stacked on it
+/// (encrypted LUKS volume, LVM logical volume, RAID array).
+#[derive(Clone, Debug, Default)]
+pub struct SubVolume {
+    /// "/home", "@snapshots", "luks-1234", "vg0-root", "tank/data"...
+    pub name: String,
+    /// i18n key of its kind: sub_btrfs, sub_zfs, sub_crypt, sub_lvm, sub_raid, sub_other.
+    pub kind: &'static str,
+    pub fs: String,
+    /// Its own size, when it has one (subvolumes share the partition's space).
+    pub size: Option<u64>,
+    pub used: Option<u64>,
+    pub free: Option<u64>,
+    pub mounts: Vec<String>,
+    /// btrfs subvolume id, when known.
+    pub id: String,
 }
 
 impl Partition {
@@ -121,9 +141,136 @@ pub fn from_lsblk(d: &mut Disk, node: &Value) {
         }
         p.read_only = cur["ro"].as_bool().unwrap_or(false) || c["ro"].as_bool().unwrap_or(false);
         p.fs = layers.join(" > ");
+        // Devices stacked on the partition (LUKS, LVM, RAID), at any depth.
+        let mut names = vec![p.name.clone()];
+        collect_stacked(c, &mut p.subs, &mut names);
+        // btrfs subvolumes and ZFS datasets mounted from it or from a device on it.
+        let pool = (layers.iter().any(|l| l == "zfs_member")).then(|| p.label.clone());
+        add_mounted_subvolumes(&mut p, &names, pool.as_deref());
         d.partitions.push(p);
     }
     linux_mount_health(&mut d.partitions);
+}
+
+/// Adds every device below `node` (encrypted volumes, LVM, RAID) and remembers their names.
+#[cfg(target_os = "linux")]
+fn collect_stacked(node: &Value, out: &mut Vec<SubVolume>, names: &mut Vec<String>) {
+    let s = |v: &Value| v.as_str().map(|s| s.trim().to_string()).unwrap_or_default();
+    for c in node["children"].as_array().into_iter().flatten() {
+        let ty = s(&c["type"]);
+        let kind = match ty.as_str() {
+            "crypt" => "sub_crypt",
+            "lvm" => "sub_lvm",
+            t if t.starts_with("raid") || t == "md" => "sub_raid",
+            _ => "sub_other",
+        };
+        let name = s(&c["name"]);
+        names.push(name.clone());
+        out.push(SubVolume {
+            name,
+            kind,
+            fs: s(&c["fstype"]),
+            size: c["size"].as_u64(),
+            used: c["fsused"].as_u64(),
+            free: c["fsavail"].as_u64(),
+            mounts: c["mountpoints"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|m| m.as_str().filter(|m| !m.is_empty()).map(str::to_string))
+                .collect(),
+            id: String::new(),
+        });
+        collect_stacked(c, out, names);
+    }
+}
+
+/// One line of /proc/self/mountinfo, the parts we use.
+#[cfg(target_os = "linux")]
+struct MountLine {
+    mount_point: String,
+    fstype: String,
+    source: String,
+    super_opts: String,
+}
+
+#[cfg(target_os = "linux")]
+fn mountinfo() -> Vec<MountLine> {
+    // Spaces and the like come escaped as \040 (octal).
+    let unescape = |s: &str| {
+        let mut out = String::new();
+        let b = s.as_bytes();
+        let mut i = 0;
+        while i < b.len() {
+            if b[i] == b'\\' && i + 3 < b.len() && b[i + 1..i + 4].iter().all(u8::is_ascii_digit) {
+                if let Ok(v) = u8::from_str_radix(&s[i + 1..i + 4], 8) {
+                    out.push(v as char);
+                    i += 4;
+                    continue;
+                }
+            }
+            out.push(b[i] as char);
+            i += 1;
+        }
+        out
+    };
+    let text = std::fs::read_to_string("/proc/self/mountinfo").unwrap_or_default();
+    text.lines()
+        .filter_map(|l| {
+            let (left, right) = l.split_once(" - ")?;
+            let lf: Vec<&str> = left.split_whitespace().collect();
+            let rf: Vec<&str> = right.split_whitespace().collect();
+            Some(MountLine {
+                mount_point: unescape(lf.get(4)?),
+                fstype: rf.first()?.to_string(),
+                source: unescape(rf.get(1)?),
+                super_opts: rf.get(2).unwrap_or(&"").to_string(),
+            })
+        })
+        .collect()
+}
+
+/// btrfs subvolumes and ZFS datasets that are mounted, grouped with all their mount points.
+/// (Unmounted subvolumes need administrator rights to list, so they are not shown.)
+#[cfg(target_os = "linux")]
+fn add_mounted_subvolumes(p: &mut Partition, names: &[String], zfs_pool: Option<&str>) {
+    let lines = mountinfo();
+    let base = |src: &str| src.rsplit('/').next().unwrap_or(src).to_string();
+    let mut found: Vec<SubVolume> = Vec::new();
+    for m in &lines {
+        let (name, kind, id) = if m.fstype == "btrfs" && names.contains(&base(&m.source)) {
+            let opt = |k: &str| {
+                m.super_opts.split(',').find_map(|o| o.strip_prefix(k)).map(str::to_string)
+            };
+            let subvol = opt("subvol=").unwrap_or_else(|| "/".into());
+            (subvol, "sub_btrfs", opt("subvolid=").unwrap_or_default())
+        } else if m.fstype == "zfs" && zfs_pool.is_some_and(|pool| !pool.is_empty() && (m.source == pool || m.source.starts_with(&format!("{pool}/")))) {
+            (m.source.clone(), "sub_zfs", String::new())
+        } else {
+            continue;
+        };
+        match found.iter_mut().find(|s| s.name == name && s.kind == kind) {
+            Some(s) => {
+                if !s.mounts.contains(&m.mount_point) {
+                    s.mounts.push(m.mount_point.clone());
+                }
+            }
+            None => found.push(SubVolume {
+                name,
+                kind,
+                fs: m.fstype.clone(),
+                mounts: vec![m.mount_point.clone()],
+                id,
+                ..Default::default()
+            }),
+        }
+    }
+    // Shortest mount point first (the "main" one), and subvolumes in path order.
+    for s in &mut found {
+        s.mounts.sort_by_key(|m| (m.len(), m.clone()));
+    }
+    found.sort_by(|a, b| a.name.cmp(&b.name));
+    p.subs.extend(found);
 }
 
 /// Read-only mounts (from /proc/mounts) and inode use (from `df -Pi`) of mounted partitions.

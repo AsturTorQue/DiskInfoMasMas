@@ -1293,8 +1293,41 @@ impl App {
                 ui.label(RichText::new(state).color(color)).on_hover_text(self.tr("h_part_state"));
                 ui.label(if p.kind.is_empty() { "—" } else { &p.kind }).on_hover_text(kind);
                 ui.end_row();
+
+                // What lives inside: subvolumes, datasets, encrypted/LVM/RAID devices.
+                for sv in &p.subs {
+                    ui.label("");
+                    ui.label(RichText::new(format!("   · {}", sv.name)).monospace().color(pal.muted))
+                        .on_hover_text(if sv.id.is_empty() { sv.name.clone() } else { format!("{}\nID {}", sv.name, sv.id) });
+                    ui.label(RichText::new(self.tr(sv.kind)).color(pal.muted));
+                    ui.label(if sv.fs.is_empty() { "—" } else { &sv.fs });
+                    ui.monospace(sv.size.map(|b| self.bytes_text(b)).unwrap_or_else(|| "—".into()))
+                        .on_hover_text(if sv.size.is_none() { self.tr("h_sub_shared") } else { "" });
+                    match (sv.used, sv.free) {
+                        (Some(u), Some(f)) if u + f > 0 => {
+                            ui.label(format!("{:.0} %", u as f64 * 100.0 / (u + f) as f64));
+                        }
+                        _ => {
+                            ui.label("—");
+                        }
+                    }
+                    ui.monospace(sv.free.map(|f| self.bytes_text(f)).unwrap_or_else(|| "—".into()));
+                    let mounts = match sv.mounts.len() {
+                        0 => "—".to_string(),
+                        1 => short(&sv.mounts[0]),
+                        n => format!("{} (+{})", short(&sv.mounts[0]), n - 1),
+                    };
+                    let tip = if sv.mounts.is_empty() { self.tr("h_sub_unmounted").to_string() } else { sv.mounts.join("\n") };
+                    ui.label(mounts).on_hover_text(tip);
+                    ui.label("");
+                    ui.label("");
+                    ui.end_row();
+                }
             }
         });
+        if d.partitions.iter().any(|p| p.subs.iter().any(|s| s.kind == "sub_btrfs")) {
+            ui.label(RichText::new(self.tr("h_btrfs_note")).small().color(pal.muted));
+        }
         ui.add_space(4.0);
         let table = d.details.iter().find(|(k, _)| *k == "d_part_table").map(|(_, v)| v.as_str()).unwrap_or("—");
         ui.label(
