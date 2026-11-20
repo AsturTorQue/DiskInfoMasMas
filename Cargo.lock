@@ -751,7 +751,7 @@ dependencies = [
 
 [[package]]
 name = "diskinfo"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "eframe",
  "image",
@@ -759,6 +759,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+ "windows-sys 0.59.0",
  "winresource",
 ]
 

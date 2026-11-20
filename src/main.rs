@@ -4,6 +4,7 @@
 mod demo;
 mod disks;
 mod alerts;
+mod cli;
 mod health;
 mod history;
 mod parts;
@@ -1630,6 +1631,10 @@ fn arg_value(args: &[String], name: &str) -> Option<String> {
 
 fn main() -> eframe::Result<()> {
     let args: Vec<String> = std::env::args().collect();
+    // `diskinfo list`, `diskinfo health`... run in the terminal without opening a window.
+    if cli::wanted(&args) {
+        std::process::exit(cli::run(&args));
+    }
     let shot = arg_value(&args, "--screenshot").map(PathBuf::from);
     // --demo shows two sample disks with S.M.A.R.T. data (for checking the layout).
     let demo = args.iter().any(|a| a == "--demo");

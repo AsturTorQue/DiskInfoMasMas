@@ -65,6 +65,27 @@ When the system already has `smartctl`, that one is used.
 - 6 languages (Español, English, Português, Français, Deutsch, Italiano) and 6 themes.
 - Linux: optional passwordless reading through a narrow polkit rule (see below).
 
+## Command line
+
+The same program works in a terminal, without opening a window:
+
+```sh
+diskinfo list                     # disks with health and temperature
+diskinfo health                   # one line per disk, for scripts
+diskinfo show [DISK]              # full report with S.M.A.R.T. attributes
+diskinfo partitions [DISK]        # partitions, btrfs subvolumes, LUKS/LVM…
+diskinfo json [DISK]              # everything as JSON
+diskinfo selftest short|long DISK # start a self-test
+diskinfo help
+```
+
+`DISK` is a number from `list`, a device (`sda`, `/dev/nvme0n1`, `PhysicalDrive0`) or a serial
+number. Add `--admin` (or run with `sudo`) to read S.M.A.R.T., `--json` for JSON from any command
+and `--lang es|en|pt|fr|de|it`. The exit code tells the worst health found: 0 good, 1 caution,
+2 bad, 3 unknown, so `diskinfo health --admin || notify-send "Disk problem"` works in a cron job.
+With the AppImage, call it the same way: `./DiskInfo-linux-x86_64.AppImage list`. On Windows run
+`DiskInfo.exe list` from a terminal opened as administrator.
+
 ## Administrator rights
 
 Every system only lets administrators talk to disks directly.
