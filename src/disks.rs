@@ -62,6 +62,10 @@ pub struct Disk {
     pub smart_type: Option<String>,
     /// How the disk is named to the person ("PhysicalDrive0", "/dev/disk0"); empty on Linux.
     pub path_label: String,
+    /// Partitions on the disk.
+    pub partitions: Vec<crate::parts::Partition>,
+    /// Extra facts: (i18n key of the label, value). Values "yes"/"no" are translated.
+    pub details: Vec<(&'static str, String)>,
 }
 
 impl Disk {
@@ -103,13 +107,15 @@ fn read_trim(p: impl AsRef<Path>) -> Option<String> {
 #[cfg(target_os = "linux")]
 /// Lists physical disks with what Linux tells any user, without S.M.A.R.T.
 pub fn list_disks() -> Vec<Disk> {
-    let Some(txt) = run(
-        "lsblk",
-        &["-J", "-b", "-o", "NAME,MODEL,SERIAL,SIZE,ROTA,TRAN,TYPE,REV,MOUNTPOINTS"],
-    ) else {
-        return Vec::new();
+    const BASIC: &str = "NAME,MODEL,SERIAL,SIZE,ROTA,TRAN,TYPE,REV,MOUNTPOINTS";
+    // Partition columns need util-linux 2.33 or later; older lsblk gets the basic list.
+    const FULL: &str = "NAME,MODEL,SERIAL,SIZE,ROTA,TRAN,TYPE,REV,MOUNTPOINTS,FSTYPE,LABEL,UUID,FSUSED,FSAVAIL,\
+                        PARTTYPENAME,PARTLABEL,PTTYPE,WWN,LOG-SEC,PHY-SEC,RM,SCHED,VENDOR,HCTL";
+    let parse = |cols: &str| -> Option<Value> {
+        let txt = run("lsblk", &["-J", "-b", "-o", cols])?;
+        serde_json::from_str::<Value>(&txt).ok()
     };
-    let Ok(j) = serde_json::from_str::<Value>(&txt) else {
+    let Some(j) = parse(FULL).or_else(|| parse(BASIC)) else {
         return Vec::new();
     };
     let mut disks = Vec::new();
@@ -139,6 +145,7 @@ pub fn list_disks() -> Vec<Disk> {
             other => other.to_uppercase(),
         };
         collect_mounts(b, &mut d.mounts);
+        crate::parts::from_lsblk(&mut d, b);
         if d.is_nvme {
             d.transfer_mode = pcie_mode(&name);
             if let Some(fw) = read_trim(format!("/sys/block/{name}/device/firmware_rev")) {
@@ -388,6 +395,7 @@ fn scan_other(admin: bool) -> ScanResult {
                 for (name, j) in list {
                     let mut d = disk_for(&name, None);
                     parse_smart(&mut d, &j);
+                    crate::parts::from_diskutil(&mut d);
                     result.disks.push(d);
                 }
                 return result;
@@ -403,6 +411,8 @@ fn scan_other(admin: bool) -> ScanResult {
             SmartRead::Denied => result.needs_admin = true,
             _ => {}
         }
+        #[cfg(target_os = "macos")]
+        crate::parts::from_diskutil(&mut d);
         result.disks.push(d);
     }
     #[cfg(windows)]
@@ -501,6 +511,12 @@ fn windows_merge(result: &mut ScanResult) {
         }
         idx.checked_sub(1)
     };
+    // Partitions, volumes and disk facts (a second query: it is slower and may partly fail).
+    let extra = crate::platform::command("powershell")
+        .args(["-NoProfile", "-Command", crate::parts::WINDOWS_PS])
+        .output()
+        .ok()
+        .and_then(|o| serde_json::from_slice::<Value>(&o.stdout).ok());
     for pd in j["disks"].as_array().into_iter().flatten() {
         let Some(id) = num(&pd["DeviceId"]) else { continue };
         let pos = result.disks.iter().position(|d| index_of(&d.smart_dev) == Some(id));
@@ -512,6 +528,9 @@ fn windows_merge(result: &mut ScanResult) {
             }
         };
         d.path_label = format!("PhysicalDrive{id}");
+        if let Some(extra) = &extra {
+            crate::parts::apply_windows(d, id, extra);
+        }
         if d.model.is_empty() {
             d.model = pd["FriendlyName"].as_str().unwrap_or("").trim().to_string();
         }
@@ -624,6 +643,88 @@ pub fn parse_smart(d: &mut Disk, j: &Value) {
         d.features.push("VolatileWriteCache".into());
     }
     d.smart_read = !d.attrs.is_empty();
+    smart_details(d, j);
+}
+
+/// Extra facts smartctl reports, for the Details tab.
+fn smart_details(d: &mut Disk, j: &Value) {
+    use crate::parts::set_detail;
+    let s = |p: &str| j.pointer(p).and_then(Value::as_str).map(|s| s.trim().to_string());
+    let u = |p: &str| j.pointer(p).and_then(Value::as_u64);
+    if let Some(v) = s("/model_family") {
+        set_detail(d, "d_family", v);
+    }
+    if let Some(passed) = j.pointer("/smart_status/passed").and_then(Value::as_bool) {
+        set_detail(d, "d_self_assessment", if passed { "passed" } else { "failed" });
+    }
+    if let (Some(naa), Some(oui), Some(id)) = (u("/wwn/naa"), u("/wwn/oui"), u("/wwn/id")) {
+        set_detail(d, "d_wwn", format!("{naa:x} {oui:06x} {id:09x}"));
+    }
+    if let (Some(l), Some(p)) = (u("/logical_block_size"), u("/physical_block_size")) {
+        set_detail(d, "d_sector", format!("{l} / {p} B"));
+    } else if let Some(l) = u("/logical_block_size") {
+        set_detail(d, "d_sector", format!("{l} B"));
+    }
+    if let Some(v) = s("/form_factor/name") {
+        set_detail(d, "d_form_factor", v);
+    }
+    if let Some(v) = s("/smartctl/device/type").or_else(|| s("/device/type")) {
+        set_detail(d, "d_smart_type", v);
+    }
+    if let Some(enabled) = j.pointer("/smart_support/enabled").and_then(Value::as_bool) {
+        set_detail(d, "d_smart_enabled", if enabled { "yes" } else { "no" });
+    }
+    if let Some(v) = j.pointer("/ata_security/enabled").and_then(Value::as_bool) {
+        set_detail(d, "d_security", if v { "yes" } else { "no" });
+    }
+    // Last self-test (ATA table or NVMe log).
+    let ata_test = j.pointer("/ata_smart_self_test_log/standard/table/0");
+    let nvme_test = j.pointer("/nvme_self_test_log/table/0");
+    if let Some(t) = ata_test {
+        let kind = t.pointer("/type/string").and_then(Value::as_str).unwrap_or("");
+        let status = t.pointer("/status/string").and_then(Value::as_str).unwrap_or("");
+        let hours = t["lifetime_hours"].as_u64().map(|h| format!(" ({h} h)")).unwrap_or_default();
+        set_detail(d, "d_last_test", format!("{kind}: {status}{hours}"));
+    } else if let Some(t) = nvme_test {
+        let kind = t.pointer("/self_test_code/string").and_then(Value::as_str).unwrap_or("");
+        let status = t.pointer("/self_test_result/string").and_then(Value::as_str).unwrap_or("");
+        let hours = t["power_on_hours"].as_u64().map(|h| format!(" ({h} h)")).unwrap_or_default();
+        set_detail(d, "d_last_test", format!("{kind}: {status}{hours}"));
+    }
+    if let Some(n) = u("/ata_smart_error_log/summary/count")
+        .or_else(|| u("/nvme_smart_health_information_log/num_err_log_entries"))
+    {
+        set_detail(d, "d_error_log", n.to_string());
+    }
+    // NVMe controller facts.
+    if let Some(v) = u("/nvme_pci_vendor/id") {
+        let sub = u("/nvme_pci_vendor/subsystem_id").map(|s| format!(" / {s:04X}")).unwrap_or_default();
+        set_detail(d, "d_pci_vendor", format!("{v:04X}{sub}"));
+    }
+    if let Some(v) = u("/nvme_ieee_oui_identifier") {
+        set_detail(d, "d_ieee_oui", format!("{v:06X}"));
+    }
+    if let Some(v) = u("/nvme_controller_id") {
+        set_detail(d, "d_controller_id", v.to_string());
+    }
+    if let Some(v) = u("/nvme_number_of_namespaces") {
+        set_detail(d, "d_namespaces", v.to_string());
+    }
+    if let Some(v) = u("/nvme_namespaces/0/formatted_lba_size") {
+        set_detail(d, "d_lba_size", format!("{v} B"));
+    }
+    if let (Some(w), Some(c)) = (
+        u("/nvme_smart_health_information_log/warning_temp_time"),
+        u("/nvme_smart_health_information_log/critical_comp_time"),
+    ) {
+        set_detail(d, "d_temp_time", format!("{w} / {c} min"));
+    }
+    if let Some(v) = s("/nvme_version/string") {
+        set_detail(d, "d_nvme_version", v);
+    }
+    if let Some(v) = s("/sata_version/string") {
+        set_detail(d, "d_sata_version", v);
+    }
 }
 
 fn parse_ata(d: &mut Disk, j: &Value) {

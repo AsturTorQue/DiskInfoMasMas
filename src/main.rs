@@ -4,6 +4,7 @@
 mod demo;
 mod disks;
 mod health;
+mod parts;
 mod i18n;
 #[cfg(target_os = "linux")]
 mod integrate;
@@ -106,12 +107,21 @@ struct App {
     show_pw: bool,
     /// Installing or removing the rule: (turning on?, result).
     pw_task: Option<Receiver<(bool, Result<(), &'static str>)>>,
+    /// Which view is shown under the disk facts.
+    tab: Tab,
     shot: Option<Shot>,
 }
 
 pub const APP_NAME: &str = "DiskInfo";
 
 const AUTO_REFRESH_CHOICES: [u32; 8] = [0, 1, 3, 5, 10, 30, 60, 120];
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Tab {
+    Smart,
+    Partitions,
+    Details,
+}
 
 impl App {
     fn new(shot: Option<PathBuf>, lang: Option<Lang>, theme: Option<Theme>, demo: bool) -> Self {
@@ -140,6 +150,7 @@ impl App {
             passwordless: false,
             show_pw: false,
             pw_task: None,
+            tab: Tab::Smart,
             shot: shot.map(|path| Shot { path, frames: 0, requested: false }),
         };
         if demo {
@@ -313,6 +324,28 @@ impl App {
             ];
             for (k, v) in rows {
                 out += &format!("{k:>26} : {v}\n");
+            }
+            for (k, v) in &d.details {
+                out += &format!("{:>26} : {}\n", self.tr(k), self.value_text(v));
+            }
+            if !d.partitions.is_empty() {
+                out += &format!("\n-- {} ---------------------------------------------------------\n", self.tr("tab_parts"));
+                for p in &d.partitions {
+                    let usage = p
+                        .used_fraction()
+                        .map(|f| format!("{:.0} %", f * 100.0))
+                        .unwrap_or_else(|| "—".into());
+                    out += &format!(
+                        "{:<14} {:>10} {:<18} {:>6}  {:<16} {}  {}\n",
+                        p.name,
+                        self.bytes_text(p.size),
+                        p.fs,
+                        usage,
+                        p.label,
+                        p.kind,
+                        p.mounts.join(" ")
+                    );
+                }
             }
             if !d.attrs.is_empty() {
                 out += "\n-- S.M.A.R.T. ---------------------------------------------------------\n";
@@ -704,72 +737,29 @@ impl eframe::App for App {
             }
             ui.add_space(6.0);
 
-            // Attribute table.
-            const ROW: f32 = 20.0;
+            // Tabs: S.M.A.R.T. / Partitions / Details.
+            ui.horizontal(|ui| {
+                for (tab, key) in [(Tab::Smart, "tab_smart"), (Tab::Partitions, "tab_parts"), (Tab::Details, "tab_details")] {
+                    let label = match tab {
+                        Tab::Partitions => format!("{} ({})", self.tr(key), d.partitions.len()),
+                        _ => self.tr(key).to_string(),
+                    };
+                    let text = RichText::new(label).strong();
+                    if ui.selectable_label(self.tab == tab, text).clicked() {
+                        self.tab = tab;
+                    }
+                }
+            });
             egui::Frame::new()
                 .stroke(egui::Stroke::new(1.0_f32, pal.stroke))
                 .fill(pal.value_bg)
                 .inner_margin(egui::Margin::same(4))
                 .show(ui, |ui| {
                     ui.set_width(ui.available_width());
-                    egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
-                        egui::Grid::new("attrs")
-                            .striped(true)
-                            .num_columns(7)
-                            .spacing([10.0, 2.0])
-                            .min_row_height(ROW)
-                            .show(ui, |ui| {
-                            for (h, help) in [
-                                ("", ""),
-                                ("ID", ""),
-                                (self.tr("col_name"), ""),
-                                (self.tr("col_current"), self.tr("h_col_current")),
-                                (self.tr("col_worst"), self.tr("h_col_worst")),
-                                (self.tr("col_threshold"), self.tr("h_col_threshold")),
-                                (self.tr("col_raw"), self.tr("h_col_raw")),
-                            ] {
-                                if help.is_empty() {
-                                    ui.label(RichText::new(h).strong());
-                                } else {
-                                    let r = ui
-                                        .horizontal(|ui| {
-                                            ui.spacing_mut().item_spacing.x = 3.0;
-                                            ui.label(RichText::new(h).strong());
-                                        })
-                                        .response
-                                        .interact(egui::Sense::hover());
-                                    r.on_hover_text(help);
-                                }
-                            }
-                            ui.end_row();
-                            if d.attrs.is_empty() {
-                                ui.label("");
-                                ui.label("");
-                                ui.label(RichText::new(self.tr("no_smart")).italics().color(pal.muted));
-                                ui.end_row();
-                            }
-                            let nvme = d.is_nvme;
-                            for a in &d.attrs {
-                                let (fill, _) = self.status_colors(a.status);
-                                // The dot sits in its own cell, centred on the row's height.
-                                let (r, _) = ui.allocate_exact_size(Vec2::new(16.0, ROW), egui::Sense::hover());
-                                ui.painter().circle_filled(r.center(), 5.0, fill);
-                                ui.monospace(format!("{:02X}", a.id));
-                                let name = self.attr_name(&d, a);
-                                let mut tip = format!("{:02X} {name}", a.id);
-                                if let Some(h) = i18n::attr_help(self.settings.language, a.id, nvme) {
-                                    tip += &format!("\n{h}");
-                                }
-                                tip += &format!("\n\n{}: {}", self.tr("raw_decimal"), a.raw);
-                                ui.label(name).on_hover_text(tip);
-                                let n = |v: Option<u32>| v.map(|x| x.to_string()).unwrap_or_default();
-                                ui.monospace(n(a.current));
-                                ui.monospace(n(a.worst));
-                                ui.monospace(n(a.thresh));
-                                ui.monospace(if nvme { format!("{:014X}", a.raw) } else { format!("{:012X}", a.raw) });
-                                ui.end_row();
-                            }
-                        });
+                    egui::ScrollArea::both().auto_shrink([false, false]).show(ui, |ui| match self.tab {
+                        Tab::Smart => self.smart_table(ui, &d, &pal),
+                        Tab::Partitions => self.partitions_view(ui, &d, &pal),
+                        Tab::Details => self.details_view(ui, &d),
                     });
                 });
         });
@@ -904,7 +894,241 @@ impl eframe::App for App {
     }
 }
 
+/// Height of a table row.
+const ROW: f32 = 20.0;
+
 impl App {
+    /// "512 MB", "931,5 GB": decimal units like the disk size, with the language's decimal mark.
+    fn bytes_text(&self, b: u64) -> String {
+        let units = ["B", "KB", "MB", "GB", "TB", "PB"];
+        let mut v = b as f64;
+        let mut i = 0;
+        while v >= 1000.0 && i < units.len() - 1 {
+            v /= 1000.0;
+            i += 1;
+        }
+        let s = if i == 0 { format!("{b} B") } else { format!("{v:.1} {}", units[i]) };
+        if self.settings.language.decimal_comma() {
+            s.replace('.', ",")
+        } else {
+            s
+        }
+    }
+
+    /// 4000787030016 → "4.000.787.030.016" (or with commas in English).
+    fn group_digits(&self, n: u64) -> String {
+        let sep = if self.settings.language.decimal_comma() { '.' } else { ',' };
+        let digits = n.to_string();
+        let mut out = String::new();
+        for (i, c) in digits.chars().enumerate() {
+            if i > 0 && (digits.len() - i) % 3 == 0 {
+                out.push(sep);
+            }
+            out.push(c);
+        }
+        out
+    }
+
+    /// Translates the few values that are words ("yes", "passed"...).
+    fn value_text(&self, v: &str) -> String {
+        match v {
+            "yes" | "no" | "passed" | "failed" => self.tr(match v {
+                "yes" => "v_yes",
+                "no" => "v_no",
+                "passed" => "v_passed",
+                _ => "v_failed",
+            })
+            .to_string(),
+            other => other.to_string(),
+        }
+    }
+
+    fn smart_table(&self, ui: &mut egui::Ui, d: &Disk, pal: &Palette) {
+        egui::Grid::new("attrs").striped(true).num_columns(7).spacing([10.0, 2.0]).min_row_height(ROW).show(ui, |ui| {
+            for (h, help) in [
+                ("", ""),
+                ("ID", ""),
+                (self.tr("col_name"), ""),
+                (self.tr("col_current"), self.tr("h_col_current")),
+                (self.tr("col_worst"), self.tr("h_col_worst")),
+                (self.tr("col_threshold"), self.tr("h_col_threshold")),
+                (self.tr("col_raw"), self.tr("h_col_raw")),
+            ] {
+                let r = ui.label(RichText::new(h).strong());
+                if !help.is_empty() {
+                    r.on_hover_text(help);
+                }
+            }
+            ui.end_row();
+            if d.attrs.is_empty() {
+                ui.label("");
+                ui.label("");
+                ui.label(RichText::new(self.tr("no_smart")).italics().color(pal.muted));
+                ui.end_row();
+            }
+            let nvme = d.is_nvme;
+            for a in &d.attrs {
+                let (fill, _) = self.status_colors(a.status);
+                // The dot sits in its own cell, centred on the row's height.
+                let (r, _) = ui.allocate_exact_size(Vec2::new(16.0, ROW), egui::Sense::hover());
+                ui.painter().circle_filled(r.center(), 5.0, fill);
+                ui.monospace(format!("{:02X}", a.id));
+                let name = self.attr_name(d, a);
+                let mut tip = format!("{:02X} {name}", a.id);
+                if let Some(h) = i18n::attr_help(self.settings.language, a.id, nvme) {
+                    tip += &format!("\n{h}");
+                }
+                tip += &format!("\n\n{}: {}", self.tr("raw_decimal"), a.raw);
+                ui.label(name).on_hover_text(tip);
+                let n = |v: Option<u32>| v.map(|x| x.to_string()).unwrap_or_default();
+                ui.monospace(n(a.current));
+                ui.monospace(n(a.worst));
+                ui.monospace(n(a.thresh));
+                ui.monospace(if nvme { format!("{:014X}", a.raw) } else { format!("{:012X}", a.raw) });
+                ui.end_row();
+            }
+        });
+    }
+
+    /// A map of the disk (one block per partition, sized by its share) and a partition table.
+    fn partitions_view(&self, ui: &mut egui::Ui, d: &Disk, pal: &Palette) {
+        if d.partitions.is_empty() {
+            ui.label(RichText::new(self.tr("no_parts")).italics().color(pal.muted));
+            return;
+        }
+        let colors = [
+            pal.accent,
+            Color32::from_rgb(46, 170, 120),
+            Color32::from_rgb(200, 140, 40),
+            Color32::from_rgb(150, 100, 200),
+            Color32::from_rgb(60, 170, 190),
+            Color32::from_rgb(200, 90, 110),
+        ];
+        // Disk map.
+        let free = parts::unallocated(d);
+        let total = (d.partitions.iter().map(|p| p.size).sum::<u64>() + free).max(1);
+        let width = ui.available_width() - 8.0;
+        let (rect, _) = ui.allocate_exact_size(Vec2::new(width, 30.0), egui::Sense::hover());
+        let mut x = rect.min.x;
+        let mut blocks: Vec<(egui::Rect, Color32, String, String)> = Vec::new();
+        for (i, p) in d.partitions.iter().enumerate() {
+            let w = (p.size as f32 / total as f32 * width).max(6.0);
+            let r = egui::Rect::from_min_size(egui::pos2(x, rect.min.y), Vec2::new(w.min(rect.max.x - x), 30.0));
+            let title = if p.mounts.is_empty() { p.name.clone() } else { format!("{} {}", p.name, p.mounts[0]) };
+            let tip = format!(
+                "{}\n{} · {}\n{}",
+                p.name,
+                self.bytes_text(p.size),
+                if p.fs.is_empty() { "—" } else { &p.fs },
+                p.mounts.join("\n")
+            );
+            blocks.push((r, colors[i % colors.len()], title, tip));
+            x += w;
+        }
+        if free > total / 200 && x < rect.max.x {
+            let r = egui::Rect::from_min_max(egui::pos2(x, rect.min.y), rect.max);
+            blocks.push((r, pal.unknown.gamma_multiply(0.5), self.tr("d_unallocated").to_string(), self.bytes_text(free)));
+        }
+        let painter = ui.painter_at(rect);
+        for (r, color, title, tip) in &blocks {
+            let inner = r.shrink(1.0);
+            painter.rect_filled(inner, 3.0, *color);
+            let galley = painter.layout_no_wrap(title.clone(), egui::FontId::proportional(11.0), Color32::WHITE);
+            if galley.size().x + 6.0 < inner.width() {
+                painter.galley(inner.left_center() + Vec2::new(4.0, -galley.size().y / 2.0), galley, Color32::WHITE);
+            }
+            ui.interact(*r, ui.id().with(("block", r.min.x as i32)), egui::Sense::hover()).on_hover_text(tip);
+        }
+        ui.add_space(6.0);
+
+        // Table.
+        egui::Grid::new("parts").striped(true).num_columns(9).spacing([7.0, 2.0]).min_row_height(ROW).show(ui, |ui| {
+            ui.label("");
+            for key in ["col_part", "col_label", "col_fs", "col_size", "col_usage", "col_free", "col_mount", "col_type"] {
+                ui.label(RichText::new(self.tr(key)).strong());
+            }
+            ui.end_row();
+            for (i, p) in d.partitions.iter().enumerate() {
+                let (r, _) = ui.allocate_exact_size(Vec2::new(14.0, ROW), egui::Sense::hover());
+                ui.painter().rect_filled(egui::Rect::from_center_size(r.center(), Vec2::splat(10.0)), 2.0, colors[i % colors.len()]);
+                ui.monospace(&p.name);
+                ui.label(if p.label.is_empty() { "—" } else { &p.label });
+                ui.label(if p.fs.is_empty() { "—" } else { &p.fs });
+                ui.monospace(self.bytes_text(p.size));
+                match p.used_fraction() {
+                    Some(f) => {
+                        // Usage bar: red above 90 %, yellow above 75 %.
+                        let (r, resp) = ui.allocate_exact_size(Vec2::new(76.0, 14.0), egui::Sense::hover());
+                        let painter = ui.painter();
+                        painter.rect_filled(r, 3.0, pal.stripe);
+                        painter.rect_stroke(r, 3.0, egui::Stroke::new(1.0_f32, pal.stroke), egui::StrokeKind::Inside);
+                        let fill = if f > 0.9 { pal.bad } else if f > 0.75 { pal.caution } else { pal.accent };
+                        let filled = egui::Rect::from_min_size(r.min, Vec2::new(r.width() * f.clamp(0.0, 1.0), r.height()));
+                        painter.rect_filled(filled.shrink(1.0), 2.0, fill);
+                        painter.text(r.center(), egui::Align2::CENTER_CENTER, format!("{:.0} %", f * 100.0), egui::FontId::proportional(10.5), pal.text);
+                        resp.on_hover_text(format!(
+                            "{}: {}\n{}: {}",
+                            self.tr("col_usage"),
+                            self.bytes_text(p.used.unwrap_or(0)),
+                            self.tr("col_free"),
+                            self.bytes_text(p.free.unwrap_or(0))
+                        ));
+                    }
+                    None => {
+                        ui.label("—");
+                    }
+                }
+                ui.monospace(p.free.map(|f| self.bytes_text(f)).unwrap_or_else(|| "—".into()));
+                // Long paths are shortened here; the whole list shows on hover.
+                let short = |s: &str| {
+                    let n = s.chars().count();
+                    if n > 16 { format!("…{}", s.chars().skip(n - 15).collect::<String>()) } else { s.to_string() }
+                };
+                let mounts = match p.mounts.len() {
+                    0 => "—".to_string(),
+                    1 => short(&p.mounts[0]),
+                    n => format!("{} (+{})", short(&p.mounts[0]), n - 1),
+                };
+                let tip = if p.mounts.is_empty() { self.tr("h_mounts").to_string() } else { p.mounts.join("\n") };
+                ui.label(mounts).on_hover_text(tip);
+                let kind = if p.uuid.is_empty() { p.kind.clone() } else { format!("{}\nUUID {}", p.kind, p.uuid) };
+                ui.label(if p.kind.is_empty() { "—" } else { &p.kind }).on_hover_text(kind);
+                ui.end_row();
+            }
+        });
+        ui.add_space(4.0);
+        let table = d.details.iter().find(|(k, _)| *k == "d_part_table").map(|(_, v)| v.as_str()).unwrap_or("—");
+        ui.label(
+            RichText::new(format!(
+                "{}: {}   ·   {}: {}",
+                self.tr("d_part_table"),
+                table,
+                self.tr("d_unallocated"),
+                self.bytes_text(free)
+            ))
+            .color(pal.muted),
+        );
+    }
+
+    /// Everything else known about the disk, as name: value rows.
+    fn details_view(&self, ui: &mut egui::Ui, d: &Disk) {
+        let mut rows: Vec<(String, String)> = vec![
+            (self.tr("model").into(), d.model.clone()),
+            (self.tr("d_capacity_bytes").into(), format!("{} B", self.group_digits(d.size_bytes))),
+        ];
+        rows.extend(d.details.iter().map(|(k, v)| (self.tr(k).to_string(), self.value_text(v))));
+        if rows.len() <= 2 {
+            ui.label(self.tr("no_details"));
+        }
+        egui::Grid::new("details").striped(true).num_columns(2).spacing([16.0, 2.0]).min_row_height(ROW).show(ui, |ui| {
+            for (k, v) in rows {
+                ui.label(RichText::new(k).strong());
+                ui.add(egui::Label::new(RichText::new(v).monospace()).wrap());
+                ui.end_row();
+            }
+        });
+    }
+
     fn screenshot_step(&mut self, ctx: &egui::Context) {
         let Some(shot) = &mut self.shot else { return };
         ctx.request_repaint();
@@ -949,6 +1173,7 @@ fn main() -> eframe::Result<()> {
     let shot = arg_value(&args, "--screenshot").map(PathBuf::from);
     // --demo shows two sample disks with S.M.A.R.T. data (for checking the layout).
     let demo = args.iter().any(|a| a == "--demo");
+    let tab = arg_value(&args, "--tab");
     // Keep the application-menu entry current (it gives the window its icon on Wayland).
     // Checks (--screenshot) and --demo runs leave the user's files alone.
     #[cfg(target_os = "linux")]
@@ -979,7 +1204,7 @@ fn main() -> eframe::Result<()> {
     });
     let mut viewport = egui::ViewportBuilder::default()
         .with_title(APP_NAME)
-        .with_inner_size([700.0, 640.0])
+        .with_inner_size([760.0, 660.0])
         .with_min_inner_size([560.0, 480.0])
         // Matches the .desktop file name, so the desktop shows the same icon in the dock.
         .with_app_id("diskinfo");
@@ -997,6 +1222,15 @@ fn main() -> eframe::Result<()> {
     eframe::run_native(
         APP_NAME,
         options,
-        Box::new(move |_cc| Ok(Box::new(App::new(shot, lang, theme, demo)))),
+        Box::new(move |_cc| {
+            let mut app = App::new(shot, lang, theme, demo);
+            // --tab parts|details opens on that tab (handy for checking the layout).
+            app.tab = match tab.as_deref() {
+                Some("parts") => Tab::Partitions,
+                Some("details") => Tab::Details,
+                _ => Tab::Smart,
+            };
+            Ok(Box::new(app))
+        }),
     )
 }

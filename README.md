@@ -41,6 +41,12 @@ When the system already has `smartctl`, that one is used.
 - Firmware, serial number, interface, transfer mode, mount points or drive letters, host
   reads/writes, rotation rate, power-on count and hours, standard and features.
 - Full S.M.A.R.T. attribute table, with a colour per attribute and hover help.
+- **Partitions** tab: a map of the disk and, for each partition, label, file system (also
+  through encryption/LVM layers), size, used and free space, mount point or drive letter and type;
+  plus the partition table (GPT/MBR) and unallocated space.
+- **Details** tab: exact capacity, device path, model family, WWN, sector sizes, form factor,
+  S.M.A.R.T. self-assessment, last self-test, logged errors, NVMe controller facts, Windows'
+  own health/boot/system flags and more, whatever the system reports.
 - Adjustable warning thresholds per disk (reallocated / pending / uncorrectable sectors,
   SSD life, temperature alarm).
 - Auto refresh, copy a text report, Fahrenheit, green mode.
@@ -137,6 +143,10 @@ página de versiones (Releases): <https://github.com/AsturTorQue/Diskinfo-for-li
 - **macOS** (Intel y Apple silicon): descomprime y mueve `DiskInfo.app` a Aplicaciones. La primera
   vez, clic derecho → **Abrir** → **Abrir**, porque no está firmada por Apple. **Leer S.M.A.R.T.**
   pide tu contraseña.
+
+Además del estado S.M.A.R.T., las pestañas **Particiones** (mapa del disco, sistema de archivos,
+espacio usado y libre, montaje, tipo) y **Detalles** (capacidad exacta, WWN, sectores, última
+autoprueba, errores registrados…) muestran más información de cada disco.
 
 Cada paquete incluye su propio `smartctl`, así que no hace falta instalar nada más.
 6 idiomas y 6 temas. Licencia MIT; basado en CrystalDiskInfo (MIT, © hiyohiyo).
