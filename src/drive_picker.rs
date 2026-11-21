@@ -73,6 +73,22 @@ fn access_of(entry: Option<usize>, dirs: &[(PathBuf, String)]) -> Access {
     }
 }
 
+/// A choosable line whose text wraps to the width it has (a plain selectable label would grow
+/// past the column instead). Returns true when it was clicked.
+fn pick_row(ui: &mut egui::Ui, selected: bool, enabled: bool, text: RichText, pal: &crate::theme::Palette) -> bool {
+    let fill = if selected { pal.accent.gamma_multiply(0.35) } else { Color32::TRANSPARENT };
+    let inner = egui::Frame::new().fill(fill).corner_radius(4).inner_margin(egui::Margin::symmetric(4, 2)).show(ui, |ui| {
+        ui.set_width(ui.available_width());
+        ui.add_enabled(enabled, egui::Label::new(text).wrap().selectable(false));
+    });
+    let rect = inner.response.rect;
+    let resp = ui.interact(rect, inner.response.id.with("pick_row"), if enabled { Sense::click() } else { Sense::hover() });
+    if enabled && resp.hovered() && !selected {
+        ui.painter().rect_stroke(rect, 4.0, Stroke::new(1.0_f32, pal.accent), egui::StrokeKind::Inside);
+    }
+    enabled && resp.clicked()
+}
+
 impl App {
     fn fs_color(&self, fs: &str) -> Color32 {
         let f = fs.to_lowercase();
@@ -110,7 +126,9 @@ impl App {
         let mut shown_any = false;
         let mut visible: Vec<usize> = Vec::new();
         let mut matched = vec![false; dirs.len()];
-        egui::ScrollArea::vertical().max_height((ui.ctx().screen_rect().height() * 0.88 - reserve).max(200.0)).auto_shrink([false, true]).show(ui, |ui| {
+        let _ = reserve;
+        // No scroll area of its own: the window scrolls as a whole, so no row is cut half-way.
+        ui.vertical(|ui| {
             for d in disks {
                 if d.partitions.is_empty() {
                     continue;
@@ -128,8 +146,8 @@ impl App {
                 shown_any = true;
                 egui::Frame::new().stroke(Stroke::new(1.0_f32, pal.stroke)).corner_radius(6).inner_margin(8).show(ui, |ui| {
                     ui.set_width(ui.available_width());
-                    // Header: model, device, size and what kind of disk it is.
-                    ui.horizontal(|ui| {
+                    // Header: model, device, size and what kind of disk it is (wraps when narrow).
+                    ui.horizontal_wrapped(|ui| {
                         let whole = dirs.iter().position(|e| e.0 == Path::new(&format!("/dev/{}", d.dev)));
                         match whole.filter(|w| mode == PickMode::FakeQuick && self.raw_target(&dirs[*w].0).is_some()) {
                             Some(w) => {
@@ -215,13 +233,12 @@ impl App {
                         // Two short lines per partition, so it also fits in a half-width column.
                         let text = format!("{name}\n{} · {}{free}", if p.fs.is_empty() { "?" } else { &p.fs }, self.bytes_text(p.size));
                         let selected = entry.is_some() && entry == Some(*idx);
-                        let resp = ui.add_enabled(entry.is_some(), egui::SelectableLabel::new(selected, RichText::new(text).monospace().size(12.0)));
-                        if resp.clicked() {
+                        if pick_row(ui, selected, entry.is_some(), RichText::new(text).monospace().size(12.0), &pal) {
                             if let Some(i) = entry {
                                 *idx = i;
                             }
                         }
-                        ui.horizontal(|ui| {
+                        ui.horizontal_wrapped(|ui| {
                             ui.label(RichText::new(format!("   {status}")).small().strong().color(color));
                             if access == Access::Unmounted {
                                 // Mount it from here, like a file manager does.
@@ -262,14 +279,12 @@ impl App {
                     let access = access_of(Some(i), dirs);
                     let label = crate::bench_ui::dir_label(lang, &dirs[i].1);
                     let short = label.split(" - ").next().unwrap_or(&label).to_string();
-                    ui.horizontal(|ui| {
-                        if ui.add(egui::SelectableLabel::new(*idx == i, RichText::new(short).monospace().size(12.5))).clicked() {
-                            *idx = i;
-                        }
-                        if access == Access::Locked {
-                            ui.label(RichText::new(t(lang, "pick_locked")).small().strong().color(pal.bad));
-                        }
-                    });
+                    if pick_row(ui, *idx == i, true, RichText::new(short).monospace().size(12.5), &pal) {
+                        *idx = i;
+                    }
+                    if access == Access::Locked {
+                        ui.label(RichText::new(format!("   {}", t(lang, "pick_locked"))).small().strong().color(pal.bad));
+                    }
                 }
             }
         });
@@ -342,7 +357,8 @@ pub(crate) fn progress_blocks(ui: &mut egui::Ui, pal: &crate::theme::Palette, s:
         red[c.min(CELLS - 1)] = true;
     }
     let width = ui.available_width();
-    let cell = ((width - (COLS as f32 - 1.0) * 2.0) / COLS as f32).clamp(4.0, 14.0);
+    // Exactly as wide as the room there is (cell plus its 2-pixel gap, times the columns).
+    let cell = (width / COLS as f32 - 2.0).clamp(2.0, 14.0);
     let (rect, _) = ui.allocate_exact_size(Vec2::new(COLS as f32 * (cell + 2.0), ROWS as f32 * (cell + 2.0)), Sense::hover());
     let blue = pal.accent;
     for c in 0..CELLS {

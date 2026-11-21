@@ -172,7 +172,7 @@ impl App {
                 let mut clip = ui.clip_rect();
                 clip.max.x = clip.max.x.min(ui.max_rect().right());
                 ui.set_clip_rect(clip);
-                egui::ScrollArea::horizontal().id_salt("fake_right").auto_shrink([false, true]).show(ui, |ui| {
+                ui.vertical(|ui| {
                 ui.add_enabled_ui(!running, |ui| {
                     egui::Grid::new("fake_cfg").num_columns(2).min_col_width(120.0).spacing([12.0, 6.0]).show(ui, |ui| {
                         ui.label(t(lang, "fake_mode"));

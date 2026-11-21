@@ -316,14 +316,13 @@ impl App {
                 let mut clip = ui.clip_rect();
                 clip.max.x = clip.max.x.min(ui.max_rect().right());
                 ui.set_clip_rect(clip);
-                // A table wider than the column scrolls sideways instead of being cut.
-                egui::ScrollArea::horizontal().id_salt("bench_right").auto_shrink([false, true]).show(ui, |ui| {
+                ui.vertical(|ui| {
                 ui.add_enabled_ui(!running, |ui| {
                     egui::Grid::new("bench_cfg").num_columns(2).spacing([12.0, 6.0]).show(ui, |ui| {
                         ui.label(t(lang, "bench_profile"));
                         egui::ComboBox::from_id_salt("bench_profile")
                             .selected_text(t(lang, if b.nvme_profile { "bench_prof_nvme" } else { "bench_prof_default" }))
-                            .width(250.0)
+                            .width((ui.available_width() - 20.0).clamp(140.0, 330.0))
                             .show_ui(ui, |ui| {
                                 ui.selectable_value(&mut b.nvme_profile, true, t(lang, "bench_prof_nvme"));
                                 ui.selectable_value(&mut b.nvme_profile, false, t(lang, "bench_prof_default"));
@@ -414,18 +413,22 @@ impl App {
                     ui.add_space(4.0);
 
                     // Results.
-                    egui::Grid::new("bench_results").striped(true).num_columns(7).spacing([14.0, 4.0]).min_row_height(24.0).show(ui, |ui| {
+                    // One table with reading and writing side by side when there is room, otherwise
+                    // a table for each, one under the other, so nothing is cut.
+                    let side_by_side = ui.available_width() >= 640.0;
+                    let parts: Vec<Vec<bool>> = if side_by_side { vec![vec![false, true]] } else { vec![vec![false], vec![true]] };
+                    for (n, part) in parts.iter().enumerate() {
+                    egui::Grid::new(("bench_results", n)).striped(true).num_columns(1 + 3 * part.len()).spacing([12.0, 4.0]).min_row_height(24.0).show(ui, |ui| {
                         ui.label("");
-                        ui.label(RichText::new(format!("{read_w} MB/s")).strong());
-                        ui.label(RichText::new("IOPS").strong());
-                        ui.label(RichText::new("µs").strong()).on_hover_text(t(lang, "bench_h_latency"));
-                        ui.label(RichText::new(format!("{write_w} MB/s")).strong());
-                        ui.label(RichText::new("IOPS").strong());
-                        ui.label(RichText::new("µs").strong()).on_hover_text(t(lang, "bench_h_latency"));
+                        for w in part {
+                            ui.label(RichText::new(format!("{} MB/s", if *w { write_w } else { read_w })).strong());
+                            ui.label(RichText::new("IOPS").strong());
+                            ui.label(RichText::new("µs").strong()).on_hover_text(t(lang, "bench_h_latency"));
+                        }
                         ui.end_row();
                         for r in &s.results {
                             ui.label(RichText::new(r.spec.name).strong().monospace());
-                            for p in [&r.read, &r.write] {
+                            for p in part.iter().map(|w| if *w { &r.write } else { &r.read }) {
                                 match p {
                                     Some(p) => {
                                         ui.label(RichText::new(self.decimal(format!("{:.2}", p.mbps))).size(16.0).strong().color(pal.accent));
@@ -442,6 +445,8 @@ impl App {
                             ui.end_row();
                         }
                     });
+                    ui.add_space(4.0);
+                    }
                     if !s.direct {
                         ui.add_space(4.0);
                         ui.label(RichText::new(t(lang, "bench_note_cached")).color(pal.bad));
