@@ -44,6 +44,8 @@ struct Settings {
     menu_entry: bool,
     /// Desktop notifications when a disk gets worse or too hot.
     alerts: bool,
+    /// Play an alarm sound when a disk gets worse or too hot.
+    alert_sound: bool,
     /// Show serial numbers as asterisks (handy for screenshots).
     hide_serial: bool,
     /// Hide the S.M.A.R.T. attribute table.
@@ -69,6 +71,7 @@ impl Default for Settings {
             thresholds: HashMap::new(),
             menu_entry: true,
             alerts: true,
+            alert_sound: true,
             hide_serial: false,
             hide_smart: false,
             smart_english: false,
@@ -671,6 +674,14 @@ impl eframe::App for App {
                     let label = self.tr("alerts_menu");
                     if ui.checkbox(&mut self.settings.alerts, label).changed() {
                         self.settings.save();
+                    }
+                    let label = self.tr("alert_sound_menu");
+                    if ui.checkbox(&mut self.settings.alert_sound, label).changed() {
+                        self.settings.save();
+                    }
+                    if ui.button(self.tr("alert_sound_test")).clicked() {
+                        alerts::play_sound();
+                        ui.close_menu();
                     }
                     if ui.button(self.tr("alert_history_menu")).clicked() {
                         self.show_alerts = true;
@@ -1875,6 +1886,12 @@ fn arg_value(args: &[String], name: &str) -> Option<String> {
 
 fn main() -> eframe::Result<()> {
     let args: Vec<String> = std::env::args().collect();
+    // `diskinfo --try-sound` plays the alarm once and says whether it worked.
+    if args.iter().any(|a| a == "--try-sound") {
+        let ok = alerts::play_sound_blocking();
+        println!("{}", if ok { "sound ok" } else { "sound failed: no player found" });
+        std::process::exit(if ok { 0 } else { 1 });
+    }
     // `diskinfo list`, `diskinfo health`... run in the terminal without opening a window.
     if cli::wanted(&args) {
         std::process::exit(cli::run(&args));

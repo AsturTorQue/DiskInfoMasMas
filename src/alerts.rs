@@ -95,6 +95,98 @@ impl Watcher {
     }
 }
 
+/// A short three-beep alarm as a WAV file (16-bit, mono, 22.05 kHz). It is made here, so no
+/// sound file has to ship with the program.
+pub fn alarm_wav() -> Vec<u8> {
+    let rate = 22_050u32;
+    let mut samples: Vec<i16> = Vec::new();
+    for freq in [880.0_f32, 660.0, 880.0] {
+        let n = (rate as f32 * 0.18) as usize;
+        for k in 0..n {
+            let t = k as f32 / rate as f32;
+            // Quick fade in and out, so the beeps do not click.
+            let fade = (k.min(n - k) as f32 / (rate as f32 * 0.01)).min(1.0);
+            samples.push(((t * freq * std::f32::consts::TAU).sin() * 0.45 * fade * i16::MAX as f32) as i16);
+        }
+        samples.extend(std::iter::repeat(0).take((rate as f32 * 0.06) as usize));
+    }
+    let data_len = (samples.len() * 2) as u32;
+    let mut w: Vec<u8> = Vec::with_capacity(44 + data_len as usize);
+    w.extend(b"RIFF");
+    w.extend((36 + data_len).to_le_bytes());
+    w.extend(b"WAVEfmt ");
+    w.extend(16u32.to_le_bytes()); // size of the format block
+    w.extend(1u16.to_le_bytes()); // plain PCM
+    w.extend(1u16.to_le_bytes()); // mono
+    w.extend(rate.to_le_bytes());
+    w.extend((rate * 2).to_le_bytes()); // bytes per second
+    w.extend(2u16.to_le_bytes()); // bytes per sample
+    w.extend(16u16.to_le_bytes()); // bits per sample
+    w.extend(b"data");
+    w.extend(data_len.to_le_bytes());
+    for s in samples {
+        w.extend(s.to_le_bytes());
+    }
+    w
+}
+
+/// Plays the alarm; never blocks the window.
+pub fn play_sound() {
+    std::thread::spawn(|| {
+        play_sound_blocking();
+    });
+}
+
+/// Plays the alarm and waits for it to end. False when no way of playing it worked.
+pub fn play_sound_blocking() -> bool {
+    let path = std::env::temp_dir().join("diskinfo-alert.wav");
+    let wav = alarm_wav();
+    if std::fs::read(&path).ok().as_deref() != Some(&wav[..]) && std::fs::write(&path, &wav).is_err() {
+        return false;
+    }
+    platform_play(&path)
+}
+
+/// Uses whatever sound player the system has (PulseAudio, PipeWire, ALSA or SoX).
+#[cfg(target_os = "linux")]
+fn platform_play(path: &std::path::Path) -> bool {
+    let players: [(&str, &[&str]); 4] = [("paplay", &[]), ("pw-play", &[]), ("aplay", &["-q"]), ("play", &["-q"])];
+    for (cmd, args) in players {
+        let done = crate::platform::command(cmd)
+            .args(args)
+            .arg(path)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status();
+        if done.map(|s| s.success()).unwrap_or(false) {
+            return true;
+        }
+    }
+    false
+}
+
+#[cfg(windows)]
+fn platform_play(path: &std::path::Path) -> bool {
+    let file = path.display().to_string().replace('\'', "''");
+    let ps = format!("(New-Object System.Media.SoundPlayer '{file}').PlaySync()");
+    crate::platform::command("powershell")
+        .args(["-NoProfile", "-Command", &ps])
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
+}
+
+#[cfg(target_os = "macos")]
+fn platform_play(path: &std::path::Path) -> bool {
+    crate::platform::command("afplay").arg(path).status().map(|s| s.success()).unwrap_or(false)
+}
+
+#[cfg(not(any(target_os = "linux", windows, target_os = "macos")))]
+fn platform_play(_path: &std::path::Path) -> bool {
+    false
+}
+
 /// Shows a desktop notification; never blocks the window.
 pub fn notify(title: &str, body: &str) {
     let (title, body) = (title.to_string(), body.to_string());
@@ -150,6 +242,18 @@ fn show(_title: &str, _body: &str) {}
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn alarm_is_a_valid_wav() {
+        let w = alarm_wav();
+        assert_eq!(&w[0..4], b"RIFF");
+        assert_eq!(&w[8..16], b"WAVEfmt ");
+        assert_eq!(&w[36..40], b"data");
+        let data_len = u32::from_le_bytes(w[40..44].try_into().unwrap()) as usize;
+        assert_eq!(w.len(), 44 + data_len, "header length matches the data");
+        let seconds = data_len as f32 / 2.0 / 22_050.0;
+        assert!((0.6..1.0).contains(&seconds), "about three quarters of a second: {seconds}");
+    }
 
     #[test]
     fn announces_each_change_once() {

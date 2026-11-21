@@ -1,6 +1,6 @@
 [package]
 name = "diskinfo"
-version = "0.5.0"
+version = "0.5.1"
 edition = "2021"
 description = "DiskInfo++: disk health (S.M.A.R.T.) and temperature viewer for Linux, Windows and macOS"
 license = "MIT"

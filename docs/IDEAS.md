@@ -8,7 +8,7 @@ Not done from the official CrystalDiskInfo:
 
 - **Tray icon** with a temperature icon per disk (needs a tray library on each system).
 - **AAM/APM control** (noise and power level of a hard disk): it changes disk settings, so it would need its own, stricter permission rule.
-- **Alert by email and alert sounds.**
+- **Alert by email** (the alert sound is done; choosing your own sound file is not).
 - **Graph of any S.M.A.R.T. attribute** (today: temperature, life, data written, bad sectors).
 - **USB bridge workarounds** for enclosures `smartctl` does not recognise by itself, and RAID controllers (Intel RST/VROC, AMD RAIDXpert2, JMicron).
 - **Windows-only extras**: event log entries, desktop gadget, drive-letter sorting.

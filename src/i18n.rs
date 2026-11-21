@@ -385,6 +385,8 @@ const TEXTS: &[(&str, [&str; 6])] = &[
     ("save_image", ["Guardar captura como imagen", "Save picture of the window", "Guardar captura como imagem", "Enregistrer une image de la fenêtre", "Bild des Fensters speichern", "Salva immagine della finestra"]),
     ("saved", ["Guardado en", "Saved to", "Guardado em", "Enregistré dans", "Gespeichert unter", "Salvato in"]),
     ("save_failed", ["No se pudo guardar el archivo.", "Could not save the file.", "Não foi possível guardar o arquivo.", "Impossible d'enregistrer le fichier.", "Die Datei konnte nicht gespeichert werden.", "Impossibile salvare il file."]),
+    ("alert_sound_menu", ["Sonido de alerta", "Alert sound", "Som de alerta", "Son d'alerte", "Alarmton", "Suono di avviso"]),
+    ("alert_sound_test", ["Probar el sonido de alerta", "Test the alert sound", "Testar o som de alerta", "Tester le son d'alerte", "Alarmton testen", "Prova il suono di avviso"]),
     ("alert_history_menu", ["Historial de avisos…", "Alert history…", "Histórico de avisos…", "Historique des alertes…", "Alarmverlauf…", "Cronologia degli avvisi…"]),
     ("alert_history_title", ["Historial de avisos", "Alert history", "Histórico de avisos", "Historique des alertes", "Alarmverlauf", "Cronologia degli avvisi"]),
     ("alert_history_empty", ["Todavía no ha habido avisos: ningún disco ha empeorado ni se ha calentado de más.", "No alerts yet: no disk has got worse or run too hot.", "Ainda não houve avisos: nenhum disco piorou nem aqueceu demais.", "Aucune alerte pour l'instant : aucun disque ne s'est dégradé ni n'a trop chauffé.", "Noch keine Alarme: kein Laufwerk hat sich verschlechtert oder war zu heiß.", "Nessun avviso finora: nessun disco è peggiorato o si è surriscaldato."]),

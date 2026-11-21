@@ -103,6 +103,10 @@ impl Core {
         }
         if logged {
             self.log.save();
+            // One alarm for everything that happened in this reading.
+            if self.settings.alert_sound {
+                alerts::play_sound();
+            }
         }
     }
 }
@@ -171,6 +175,7 @@ mod tests {
         private_config();
         let mut settings = Settings::default();
         settings.alerts = false; // no desktop notification during a test
+        settings.alert_sound = false; // and no noise
         new(settings, History::default(), Log::default())
     }
 
