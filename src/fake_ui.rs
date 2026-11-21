@@ -57,6 +57,38 @@ impl App {
         best.map(|b| b.1)
     }
 
+    /// The whole drive that holds `dir` (a mounted folder, or "/dev/sdb1" of a partition that is
+    /// not mounted) when the quick test may work on it directly (Linux): its device, its size and
+    /// the partitions to unmount first. Never for a drive that holds the system or the home folder.
+    pub(crate) fn raw_target(&self, dir: &Path) -> Option<(String, u64, Vec<String>)> {
+        if !cfg!(target_os = "linux") {
+            return None;
+        }
+        const SYSTEM: [&str; 8] = ["/boot", "/usr", "/etc", "/sysroot", "/home", "/var/home", "/var/lib", "/opt"];
+        let mut best: Option<(usize, &crate::disks::Disk)> = None;
+        for d in &self.disks {
+            for p in &d.partitions {
+                if Path::new(&format!("/dev/{}", p.name)) == dir && best.is_none() {
+                    best = Some((0, d));
+                }
+                for m in &p.mounts {
+                    let md = crate::bench_ui::mount_dir(m);
+                    if dir.starts_with(&md) && best.map_or(true, |(l, _)| md.as_os_str().len() >= l) {
+                        best = Some((md.as_os_str().len(), d));
+                    }
+                }
+            }
+        }
+        let (_, d) = best?;
+        let mounts: Vec<&String> = d.partitions.iter().flat_map(|p| p.mounts.iter()).collect();
+        let system = mounts.iter().any(|m| m.as_str() == "/" || m.as_str() == "/var" || SYSTEM.iter().any(|s| m.as_str() == *s || m.starts_with(&format!("{s}/"))));
+        if system || d.dev.is_empty() || d.size_bytes == 0 || !d.dev.chars().all(|c| c.is_ascii_alphanumeric()) {
+            return None;
+        }
+        let to_unmount = d.partitions.iter().filter(|p| !p.mounts.is_empty()).map(|p| format!("/dev/{}", p.name)).collect();
+        Some((format!("/dev/{}", d.dev), d.size_bytes, to_unmount))
+    }
+
     pub(crate) fn fake_open(&mut self) {
         self.fake.dirs = self.bench_folders();
         self.fake.dir_idx = self.fake.dir_idx.min(self.fake.dirs.len().saturating_sub(1));
@@ -91,6 +123,7 @@ impl App {
         let mut mounted: Option<PathBuf> = None;
         let mut open = true;
         let gb = |b: u64| self.decimal(format!("{:.2}", b as f64 / 1e9)) + " GB";
+        let raw = if f.quick { f.dirs.get(f.dir_idx).and_then(|d| self.raw_target(&d.0)) } else { None };
         let free_now: Option<u64> = f.dirs.get(f.dir_idx).and_then(|d| crate::platform::free_bytes(&d.0));
 
         egui::Window::new(t(lang, "fake_title").trim_end_matches('…'))
@@ -146,7 +179,8 @@ impl App {
                     });
                 });
                 if f.quick {
-                    ui.label(RichText::new(t(lang, "fake_quick_hint")).color(pal.muted));
+                    let key = if raw.is_some() { "fake_quick_raw_hint" } else { "fake_quick_hint" };
+                    ui.label(RichText::new(t(lang, key)).color(pal.muted));
                 }
                 if !f.quick && PERCENTS[f.pct_idx] >= 50 && !running {
                     ui.label(RichText::new(t(lang, "fake_pct_warn")).color(pal.caution));
@@ -157,7 +191,7 @@ impl App {
                         if ui.button(t(lang, "bench_stop")).clicked() {
                             stop = true;
                         }
-                    } else if ui.add_enabled(free_now.is_some() && f.dirs.get(f.dir_idx).is_some_and(|d| !crate::bench_ui::dir_label_locked(&d.1)), egui::Button::new(RichText::new(t(lang, "bench_start")).strong())).clicked() {
+                    } else if ui.add_enabled(raw.is_some() || (free_now.is_some() && f.dirs.get(f.dir_idx).is_some_and(|d| !crate::bench_ui::dir_label_locked(&d.1))), egui::Button::new(RichText::new(t(lang, "bench_start")).strong())).clicked() {
                         start = true;
                     }
                 });
@@ -270,6 +304,32 @@ impl App {
         if stop {
             if let Some(h) = &f.handle {
                 h.cancel.store(true, Ordering::Relaxed);
+            }
+        }
+        #[cfg(target_os = "linux")]
+        if start && f.quick {
+            if let Some((dev, size, unmount)) = raw {
+                start = false;
+                f.claimed = Some(size);
+                f.free_at_start = size;
+                f.last = None;
+                // The drive must not be mounted while its spots are rewritten.
+                let failed = unmount.iter().find_map(|p| {
+                    let out = std::process::Command::new("udisksctl").args(["unmount", "-b", p]).output();
+                    match out {
+                        Ok(o) if o.status.success() => None,
+                        Ok(o) => Some(String::from_utf8_lossy(&o.stderr).trim().to_string()),
+                        Err(e) => Some(e.to_string()),
+                    }
+                });
+                match failed {
+                    None => f.handle = Some(crate::rawcheck::start(dev)),
+                    Some(e) => {
+                        let mut s = State::new(&fakecheck::Config { dir: PathBuf::new(), bytes: 0, quick: true });
+                        s.phase = Phase::Failed(e);
+                        f.last = Some(s);
+                    }
+                }
             }
         }
         if start {

@@ -16,6 +16,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
+use serde::{Deserialize, Serialize};
 
 pub const BLOCK: usize = 1 << 20;
 /// Blocks in each test file (1 GiB, under the 4 GiB limit of FAT32).
@@ -38,6 +39,7 @@ pub struct Config {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Serialize, Deserialize)]
 pub enum BlockKind {
     /// It holds the data of another block (the drive wrapped around): the other block's number.
     Overwritten(u64),
@@ -48,12 +50,14 @@ pub enum BlockKind {
 }
 
 #[derive(Clone, Copy, Debug)]
+#[derive(Serialize, Deserialize)]
 pub struct BadBlock {
     pub index: u64,
     pub kind: BlockKind,
 }
 
 #[derive(Clone, Debug, PartialEq)]
+#[derive(Serialize, Deserialize)]
 pub enum Phase {
     Idle,
     Writing,
@@ -64,6 +68,7 @@ pub enum Phase {
 }
 
 #[derive(Clone, Debug, PartialEq)]
+#[derive(Serialize, Deserialize)]
 pub enum Verdict {
     /// Everything came back as written.
     Genuine,
@@ -76,6 +81,7 @@ pub enum Verdict {
 }
 
 #[derive(Clone, Debug)]
+#[derive(Serialize, Deserialize)]
 pub struct State {
     pub phase: Phase,
     /// 0..=1 over writing and verifying.

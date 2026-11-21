@@ -72,7 +72,7 @@ When the system already has `smartctl`, that one is used.
   the folder you pick (deleted afterwards) and bypasses the system cache. Queue depth and threads
   are emulated with Q×T worker threads, so numbers compare well between disks but can differ a bit
   from CrystalDiskMark's. Also from the terminal: `diskinfo bench --path DIR --size 1G`.
-- **Fake drive test** (Function → Check if the drive is fake…), with a quick mode (a few hundred blocks spread over the whole free space, ValiDrive-style, about a minute) and a full mode (every block, H2testw-style): fills the free space of a USB stick,
+- **Fake drive test** (Function → Check if the drive is fake…), with a quick mode (ValiDrive-style: on Linux it works on the raw drive, asks for administrator rights, unmounts it and tests a few hundred spots over the whole drive in under a minute, putting every spot back; on other systems or for system drives it uses files) and a full mode (every block, H2testw-style): fills the free space of a USB stick,
   card or SSD with unique blocks, reads them back and tells whether it is genuine, faulty or a fake
   that holds less than it claims (with the estimated real capacity). Only conclusive when it checks
   (nearly) all the free space. Also from the terminal: `diskinfo fakecheck --path DIR --quick` or `--percent 100`.

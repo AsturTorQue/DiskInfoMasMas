@@ -424,6 +424,14 @@ const TEXTS: &[(&str, [&str; 6])] = &[
     ("bench_locked", ["sin permiso de escritura (abre DiskInfo++ como administrador o elige otra carpeta)", "no write access (run DiskInfo++ as administrator or pick another folder)", "sem permissão de escrita (abra o DiskInfo++ como administrador ou escolha outra pasta)", "pas d'accès en écriture (lancez DiskInfo++ en administrateur ou choisissez un autre dossier)", "kein Schreibzugriff (DiskInfo++ als Administrator starten oder anderen Ordner wählen)", "nessun permesso di scrittura (apri DiskInfo++ come amministratore o scegli un'altra cartella)"]),
     ("bench_mount", ["Montar unidad", "Mount drive", "Montar unidade", "Monter le disque", "Laufwerk einbinden", "Monta unità"]),
     ("bench_unmounted", ["sin montar: pulsa Montar para poder probarla", "not mounted: press Mount to test it", "não montada: prima Montar para a testar", "non montée : cliquez sur Monter pour la tester", "nicht eingebunden: zum Testen auf Einbinden klicken", "non montata: premi Monta per provarla"]),
+    ("fake_quick_raw_hint", [
+        "Prueba directamente la unidad entera (pide permisos de administrador y la desmonta); los datos se conservan, porque cada zona usada se restaura. Tarda menos de un minuto aunque la unidad sea muy grande.",
+        "Tests the whole drive directly (asks for administrator rights and unmounts it); your data is kept, because every spot used is put back. It takes under a minute even on a very large drive.",
+        "Testa a unidade inteira diretamente (pede permissões de administrador e desmonta-a); os dados são preservados, porque cada zona usada é restaurada. Leva menos de um minuto mesmo numa unidade muito grande.",
+        "Teste directement tout le disque (demande les droits d'administrateur et le démonte) ; vos données sont conservées, car chaque zone utilisée est restaurée. Moins d'une minute, même sur un très gros disque.",
+        "Prüft das ganze Laufwerk direkt (fragt nach Administratorrechten und hängt es aus); Ihre Daten bleiben erhalten, da jede benutzte Stelle wiederhergestellt wird. Dauert unter einer Minute, selbst bei sehr großen Laufwerken.",
+        "Verifica direttamente l'intera unità (chiede i permessi di amministratore e la smonta); i dati vengono conservati perché ogni zona usata viene ripristinata. Richiede meno di un minuto anche su unità molto grandi.",
+    ]),
     ("fake_menu", ["Comprobar si la unidad es falsa…", "Check if the drive is fake…", "Verificar se a unidade é falsa…", "Vérifier si le disque est un faux…", "Prüfen, ob das Laufwerk gefälscht ist…", "Verifica se l'unità è contraffatta…"]),
     ("fake_title", ["Comprobar si la unidad es falsa", "Check if the drive is fake", "Verificar se a unidade é falsa", "Vérifier si le disque est un faux", "Prüfen, ob das Laufwerk gefälscht ist", "Verifica se l'unità è contraffatta"]),
     ("fake_intro", [

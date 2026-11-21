@@ -9,6 +9,8 @@ mod bench;
 mod bench_ui;
 mod fake_ui;
 mod fakecheck;
+#[cfg(target_os = "linux")]
+mod rawcheck;
 mod cli;
 mod health;
 mod history;
@@ -1962,6 +1964,11 @@ fn main() -> eframe::Result<()> {
         std::process::exit(if ok { 0 } else { 1 });
     }
     // `diskinfo list`, `diskinfo health`... run in the terminal without opening a window.
+    // The quick fake-drive test runs a copy of this program as root (see rawcheck.rs).
+    #[cfg(target_os = "linux")]
+    if args.get(1).map(String::as_str) == Some("rawcheck") {
+        std::process::exit(rawcheck::helper_main(&args));
+    }
     if cli::wanted(&args) {
         std::process::exit(cli::run(&args));
     }
