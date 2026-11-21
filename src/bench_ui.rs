@@ -279,27 +279,21 @@ impl App {
             .open(&mut open)
             .resizable(true)
             .collapsible(false)
-            .default_width(700.0)
+            .default_width(640.0)
+            .min_width(520.0)
+            .max_width(700.0)
+            .vscroll(true)
             .show(ctx, |ui| {
+                ui.set_max_width(660.0);
                 ui.add_enabled_ui(!running, |ui| {
+                    if self.drive_picker(ui, &b.dirs, &mut b.dir_idx, crate::drive_picker::PickMode::Speed) {
+                        refresh = true;
+                    }
+                    if let Some(p) = mount_row(ui, lang, b.dirs.get(b.dir_idx)) {
+                        mounted = Some(p);
+                    }
+                    ui.add_space(6.0);
                     egui::Grid::new("bench_cfg").num_columns(2).spacing([12.0, 6.0]).show(ui, |ui| {
-                        ui.label(t(lang, "bench_folder"));
-                        ui.horizontal(|ui| {
-                            let shown = b.dirs.get(b.dir_idx).map(|d| dir_label(lang, &d.1)).unwrap_or_else(|| t(lang, "bench_no_dirs").to_string());
-                            egui::ComboBox::from_id_salt("bench_dir").width(430.0).selected_text(shown).show_ui(ui, |ui| {
-                                for (i, (_, label)) in b.dirs.iter().enumerate() {
-                                    ui.selectable_value(&mut b.dir_idx, i, dir_label(lang, label));
-                                }
-                            });
-                            if ui.button("⟳").on_hover_text(t(lang, "bench_refresh")).clicked() {
-                                refresh = true;
-                            }
-                        });
-                        ui.end_row();
-                        if let Some(p) = mount_row(ui, lang, b.dirs.get(b.dir_idx)) {
-                            mounted = Some(p);
-                        }
-
                         ui.label(t(lang, "bench_profile"));
                         egui::ComboBox::from_id_salt("bench_profile")
                             .selected_text(t(lang, if b.nvme_profile { "bench_prof_nvme" } else { "bench_prof_default" }))

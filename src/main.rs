@@ -7,6 +7,7 @@ mod alerts;
 mod autostart;
 mod bench;
 mod bench_ui;
+mod drive_picker;
 mod fake_ui;
 mod fakecheck;
 #[cfg(target_os = "linux")]

@@ -64,7 +64,6 @@ impl App {
         if !cfg!(target_os = "linux") {
             return None;
         }
-        const SYSTEM: [&str; 8] = ["/boot", "/usr", "/etc", "/sysroot", "/home", "/var/home", "/var/lib", "/opt"];
         let mut best: Option<(usize, &crate::disks::Disk)> = None;
         for d in &self.disks {
             for p in &d.partitions {
@@ -80,9 +79,7 @@ impl App {
             }
         }
         let (_, d) = best?;
-        let mounts: Vec<&String> = d.partitions.iter().flat_map(|p| p.mounts.iter()).collect();
-        let system = mounts.iter().any(|m| m.as_str() == "/" || m.as_str() == "/var" || SYSTEM.iter().any(|s| m.as_str() == *s || m.starts_with(&format!("{s}/"))));
-        if system || d.dev.is_empty() || d.size_bytes == 0 || !d.dev.chars().all(|c| c.is_ascii_alphanumeric()) {
+        if crate::drive_picker::is_system_disk(d) || d.dev.is_empty() || d.size_bytes == 0 || !d.dev.chars().all(|c| c.is_ascii_alphanumeric()) {
             return None;
         }
         let to_unmount = d.partitions.iter().filter(|p| !p.mounts.is_empty()).map(|p| format!("/dev/{}", p.name)).collect();
@@ -131,27 +128,23 @@ impl App {
             .resizable(true)
             .collapsible(false)
             .default_width(640.0)
+            .min_width(520.0)
+            .max_width(700.0)
+            .vscroll(true)
             .show(ctx, |ui| {
+                ui.set_max_width(660.0);
                 ui.label(t(lang, "fake_intro"));
                 ui.add_space(6.0);
                 ui.add_enabled_ui(!running, |ui| {
+                    let mode = if f.quick { crate::drive_picker::PickMode::FakeQuick } else { crate::drive_picker::PickMode::FakeFull };
+                    if self.drive_picker(ui, &f.dirs, &mut f.dir_idx, mode) {
+                        refresh = true;
+                    }
+                    if let Some(p) = crate::bench_ui::mount_row(ui, lang, f.dirs.get(f.dir_idx)) {
+                        mounted = Some(p);
+                    }
+                    ui.add_space(6.0);
                     egui::Grid::new("fake_cfg").num_columns(2).spacing([12.0, 6.0]).show(ui, |ui| {
-                        ui.label(t(lang, "bench_folder"));
-                        ui.horizontal(|ui| {
-                            let shown = f.dirs.get(f.dir_idx).map(|d| crate::bench_ui::dir_label(lang, &d.1)).unwrap_or_else(|| t(lang, "bench_no_dirs").to_string());
-                            egui::ComboBox::from_id_salt("fake_dir").width(430.0).selected_text(shown).show_ui(ui, |ui| {
-                                for (i, (_, label)) in f.dirs.iter().enumerate() {
-                                    ui.selectable_value(&mut f.dir_idx, i, crate::bench_ui::dir_label(lang, label));
-                                }
-                            });
-                            if ui.button("⟳").on_hover_text(t(lang, "bench_refresh")).clicked() {
-                                refresh = true;
-                            }
-                        });
-                        ui.end_row();
-                        if let Some(p) = crate::bench_ui::mount_row(ui, lang, f.dirs.get(f.dir_idx)) {
-                            mounted = Some(p);
-                        }
                         ui.label(t(lang, "fake_mode"));
                         ui.horizontal(|ui| {
                             ui.selectable_value(&mut f.quick, true, t(lang, "fake_mode_quick"));
@@ -250,6 +243,13 @@ impl App {
                             ui.add_space(4.0);
                             ui.label(RichText::new(t(lang, "fake_partial_note")).color(pal.caution));
                         }
+                    }
+
+                    // The block map of the test.
+                    if s.written > 0 || running {
+                        ui.add_space(6.0);
+                        let span = if s.quick { f.free_at_start } else { s.total * BLOCK as u64 };
+                        crate::drive_picker::progress_blocks(ui, &pal, s, span);
                     }
 
                     // Numbers.
