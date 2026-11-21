@@ -7,6 +7,8 @@ mod alerts;
 mod autostart;
 mod bench;
 mod bench_ui;
+mod fake_ui;
+mod fakecheck;
 mod cli;
 mod health;
 mod history;
@@ -156,6 +158,8 @@ struct App {
     show_alerts: bool,
     /// The disk speed test window.
     bench: bench_ui::BenchUi,
+    /// The "is this drive real?" window.
+    fake: fake_ui::FakeUi,
     speeds: speed::Speeds,
     /// Which line the History tab draws.
     metric: Metric,
@@ -228,6 +232,7 @@ impl App {
             },
             show_alerts: false,
             bench: bench_ui::BenchUi::default(),
+            fake: fake_ui::FakeUi::default(),
             speeds: speed::start(),
             metric: Metric::Temperature,
             show_selftest: false,
@@ -673,6 +678,10 @@ impl eframe::App for App {
                     });
                     if cfg!(target_os = "linux") && ui.button(self.tr("pw_menu")).clicked() {
                         self.show_pw = true;
+                        ui.close_menu();
+                    }
+                    if ui.button(self.tr("fake_menu")).clicked() {
+                        self.fake_open();
                         ui.close_menu();
                     }
                     if ui.button(self.tr("bench_menu")).clicked() {
@@ -1259,6 +1268,7 @@ impl eframe::App for App {
         }
 
         self.bench_window(ctx);
+        self.fake_window(ctx);
         if self.try_bench {
             ctx.request_repaint();
             if let Some(last) = self.bench.last.as_ref().filter(|s| !s.running()) {
@@ -1995,6 +2005,14 @@ fn main() -> eframe::Result<()> {
                 app.bench.secs = 1;
                 app.bench.interval = 0;
                 app.bench.auto_start = true;
+            }
+            if open_window.as_deref() == Some("fake") {
+                app.fake_open();
+                if demo {
+                    app.fake.last = Some(demo::demo_fake());
+                    app.fake.claimed = Some(128_000_000_000);
+                    app.fake.free_at_start = 100_000_000_000;
+                }
             }
             if open_window.as_deref() == Some("bench") {
                 app.bench_open();

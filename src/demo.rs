@@ -166,3 +166,26 @@ pub fn demo_bench() -> crate::bench::State {
     s.fraction = 1.0;
     s
 }
+
+/// A sample "fake drive" verdict for the window: claims 128 GB, holds about 8 GB.
+pub fn demo_fake() -> crate::fakecheck::State {
+    use crate::fakecheck::{BadBlock, BlockKind, Config, Phase, State, Verdict};
+    let cfg = Config { dir: std::path::PathBuf::new(), bytes: 100 << 30 };
+    let mut s = State::new(&cfg);
+    s.phase = Phase::Done;
+    s.fraction = 1.0;
+    s.written = 102_400;
+    s.verified = 102_400;
+    s.bad_count = 94_208;
+    s.bad = vec![
+        BadBlock { index: 0, kind: BlockKind::Overwritten(8192) },
+        BadBlock { index: 1, kind: BlockKind::Overwritten(8193) },
+        BadBlock { index: 2, kind: BlockKind::Overwritten(8194) },
+    ];
+    s.write_avg = 18.4;
+    s.write_min = 3.1;
+    s.read_avg = 31.7;
+    s.read_min = 12.9;
+    s.verdict = Some(Verdict::Fake { real_bytes: 8_589_934_592 });
+    s
+}

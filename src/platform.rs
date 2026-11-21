@@ -117,3 +117,35 @@ pub fn relaunch_as_admin() -> bool {
         .map(|s| s.success())
         .unwrap_or(false)
 }
+
+/// Free space (bytes) available to the person on the disk that holds `dir`.
+pub fn free_bytes(dir: &std::path::Path) -> Option<u64> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStrExt;
+        let path = std::ffi::CString::new(dir.as_os_str().as_bytes()).ok()?;
+        // SAFETY: `path` is a valid C string and `st` is a plain struct that statvfs fills in.
+        let mut st: libc::statvfs = unsafe { std::mem::zeroed() };
+        let rc = unsafe { libc::statvfs(path.as_ptr(), &mut st) };
+        if rc != 0 {
+            return None;
+        }
+        Some(st.f_bavail as u64 * st.f_frsize as u64)
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::ffi::OsStrExt;
+        let wide: Vec<u16> = dir.as_os_str().encode_wide().chain(std::iter::once(0)).collect();
+        let mut free: u64 = 0;
+        // SAFETY: `wide` is a NUL-terminated wide string and `free` a valid output location.
+        let ok = unsafe {
+            windows_sys::Win32::Storage::FileSystem::GetDiskFreeSpaceExW(wide.as_ptr(), &mut free, std::ptr::null_mut(), std::ptr::null_mut())
+        };
+        (ok != 0).then_some(free)
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = dir;
+        None
+    }
+}

@@ -262,6 +262,33 @@ fn open_file(path: &Path, direct: bool) -> io::Result<File> {
     Ok(f)
 }
 
+/// Opens a file that already exists for reading, bypassing the system cache when asked.
+pub fn open_existing(path: &Path, direct: bool) -> io::Result<File> {
+    let mut o = OpenOptions::new();
+    o.read(true);
+    #[cfg(target_os = "linux")]
+    if direct {
+        use std::os::unix::fs::OpenOptionsExt;
+        o.custom_flags(libc::O_DIRECT);
+    }
+    #[cfg(windows)]
+    if direct {
+        use std::os::windows::fs::OpenOptionsExt;
+        o.custom_flags(0x2000_0000 | 0x8000_0000);
+    }
+    let f = o.open(path)?;
+    #[cfg(target_os = "macos")]
+    if direct {
+        use std::os::fd::AsRawFd;
+        // SAFETY: a valid file descriptor and a plain flag.
+        unsafe {
+            libc::fcntl(f.as_raw_fd(), libc::F_NOCACHE, 1);
+        }
+    }
+    let _ = direct;
+    Ok(f)
+}
+
 /// The temporary test file; it is deleted when this is dropped.
 pub struct TestFile {
     pub file: Arc<File>,
@@ -270,19 +297,25 @@ pub struct TestFile {
     pub direct: bool,
 }
 
+/// Makes a new file, bypassing the system cache when the file system allows it.
+/// Returns the file and whether the cache is bypassed.
+pub fn create_direct_or_cached(path: &Path) -> io::Result<(File, bool)> {
+    match open_file(path, true) {
+        Ok(f) => Ok((f, true)),
+        Err(_) => {
+            // Some file systems (tmpfs, certain network shares) refuse direct I/O; a failed
+            // open may still have made the file.
+            let _ = std::fs::remove_file(path);
+            Ok((open_file(path, false)?, false))
+        }
+    }
+}
+
 impl TestFile {
     pub fn create(dir: &Path, size: u64) -> io::Result<TestFile> {
         let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0);
         let path = dir.join(format!("diskinfo-bench-{}-{stamp}.tmp", std::process::id()));
-        let (file, direct) = match open_file(&path, true) {
-            Ok(f) => (f, true),
-            Err(_) => {
-                // Some file systems (tmpfs, certain network shares) refuse direct I/O; a failed
-                // open may still have made the file.
-                let _ = std::fs::remove_file(&path);
-                (open_file(&path, false)?, false)
-            }
-        };
+        let (file, direct) = create_direct_or_cached(&path)?;
         let tf = TestFile { file: Arc::new(file), path, direct };
         tf.file.set_len(size)?;
         Ok(tf)
@@ -312,7 +345,7 @@ fn pwrite(f: &File, buf: &[u8], off: u64) -> io::Result<usize> {
     std::os::windows::fs::FileExt::seek_write(f, buf, off)
 }
 
-fn read_full(f: &File, buf: &mut [u8], off: u64) -> io::Result<()> {
+pub(crate) fn read_full(f: &File, buf: &mut [u8], off: u64) -> io::Result<()> {
     let mut done = 0;
     while done < buf.len() {
         let n = pread(f, &mut buf[done..], off + done as u64)?;
@@ -324,7 +357,7 @@ fn read_full(f: &File, buf: &mut [u8], off: u64) -> io::Result<()> {
     Ok(())
 }
 
-fn write_full(f: &File, buf: &[u8], off: u64) -> io::Result<()> {
+pub(crate) fn write_full(f: &File, buf: &[u8], off: u64) -> io::Result<()> {
     let mut done = 0;
     while done < buf.len() {
         let n = pwrite(f, &buf[done..], off + done as u64)?;

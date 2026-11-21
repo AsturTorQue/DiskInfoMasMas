@@ -72,7 +72,7 @@ fn writable(dir: &Path) -> bool {
 }
 
 /// "C:" → "C:\" (a bare drive letter means the current folder of that drive).
-fn mount_dir(m: &str) -> PathBuf {
+pub(crate) fn mount_dir(m: &str) -> PathBuf {
     if m.len() == 2 && m.ends_with(':') {
         PathBuf::from(format!("{m}\\"))
     } else {
@@ -82,7 +82,7 @@ fn mount_dir(m: &str) -> PathBuf {
 
 impl App {
     /// Folders of the disks on screen where a test file can be made, and the person's own folders.
-    fn bench_folders(&self) -> Vec<(PathBuf, String)> {
+    pub(crate) fn bench_folders(&self) -> Vec<(PathBuf, String)> {
         let mut out: Vec<(PathBuf, String)> = Vec::new();
         let add = |dir: PathBuf, label: String, out: &mut Vec<(PathBuf, String)>| {
             if !out.iter().any(|(p, _)| *p == dir) && dir.is_dir() && writable(&dir) {
