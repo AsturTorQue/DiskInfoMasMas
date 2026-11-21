@@ -422,6 +422,8 @@ const TEXTS: &[(&str, [&str; 6])] = &[
         "La modalità rapida non ha trovato problemi nei campioni, ma non verifica tutto: alcune contraffazioni emergono solo con la modalità completa.",
     ]),
     ("bench_locked", ["sin permiso de escritura (abre DiskInfo++ como administrador o elige otra carpeta)", "no write access (run DiskInfo++ as administrator or pick another folder)", "sem permissão de escrita (abra o DiskInfo++ como administrador ou escolha outra pasta)", "pas d'accès en écriture (lancez DiskInfo++ en administrateur ou choisissez un autre dossier)", "kein Schreibzugriff (DiskInfo++ als Administrator starten oder anderen Ordner wählen)", "nessun permesso di scrittura (apri DiskInfo++ come amministratore o scegli un'altra cartella)"]),
+    ("bench_mount", ["Montar unidad", "Mount drive", "Montar unidade", "Monter le disque", "Laufwerk einbinden", "Monta unità"]),
+    ("bench_unmounted", ["sin montar: pulsa Montar para poder probarla", "not mounted: press Mount to test it", "não montada: prima Montar para a testar", "non montée : cliquez sur Monter pour la tester", "nicht eingebunden: zum Testen auf Einbinden klicken", "non montata: premi Monta per provarla"]),
     ("fake_menu", ["Comprobar si la unidad es falsa…", "Check if the drive is fake…", "Verificar se a unidade é falsa…", "Vérifier si le disque est un faux…", "Prüfen, ob das Laufwerk gefälscht ist…", "Verifica se l'unità è contraffatta…"]),
     ("fake_title", ["Comprobar si la unidad es falsa", "Check if the drive is fake", "Verificar se a unidade é falsa", "Vérifier si le disque est un faux", "Prüfen, ob das Laufwerk gefälscht ist", "Verifica se l'unità è contraffatta"]),
     ("fake_intro", [

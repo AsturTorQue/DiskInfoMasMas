@@ -124,18 +124,61 @@ fn home_inside(mount: &Path) -> Option<PathBuf> {
     (home.starts_with(&mount) && writable(&home)).then_some(home)
 }
 
-/// True for a folder entry that the person cannot write to (see `bench_folders`).
+/// True for a folder entry that cannot be tested in as it is: no write access, or a partition
+/// that is not mounted yet (see `bench_folders`).
 pub(crate) fn dir_label_locked(label: &str) -> bool {
-    label.ends_with(LOCKED)
+    label.ends_with(LOCKED) || label.ends_with(UNMOUNTED)
+}
+
+const UNMOUNTED: &str = " [u]";
+
+/// Mounts a partition the way a file manager does (no administrator needed on most desktops);
+/// returns the folder it was mounted at.
+pub(crate) fn mount_device(dev: &Path) -> Result<PathBuf, String> {
+    let out = std::process::Command::new("udisksctl").args(["mount", "-b"]).arg(dev).output().map_err(|e| format!("udisksctl: {e}"))?;
+    let text = format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+    // "Mounted /dev/sdb1 at /run/media/ana/USB." or "... already mounted at `/run/media/ana/USB'."
+    let at = text.rsplit(" at ").next().unwrap_or("").trim().trim_start_matches('`').trim_end_matches(['.', '\'', '\n', ' ']);
+    if (out.status.success() || text.contains("already mounted")) && !at.is_empty() && Path::new(at).is_dir() {
+        Ok(PathBuf::from(at))
+    } else {
+        Err(text.trim().to_string())
+    }
+}
+
+/// Under the folder list: a "Mount" button when the chosen entry is a partition that is not
+/// mounted. Returns the folder once it is mounted.
+pub(crate) fn mount_row(ui: &mut egui::Ui, lang: crate::i18n::Lang, selected: Option<&(PathBuf, String)>) -> Option<PathBuf> {
+    let (dev, _) = selected.filter(|d| d.1.ends_with(UNMOUNTED))?;
+    let id = egui::Id::new("mount_msg");
+    let mut done = None;
+    ui.horizontal(|ui| {
+        if ui.button(t(lang, "bench_mount")).clicked() {
+            match mount_device(dev) {
+                Ok(p) => {
+                    ui.ctx().data_mut(|d| d.remove::<String>(id));
+                    done = Some(p);
+                }
+                Err(e) => ui.ctx().data_mut(|d| d.insert_temp(id, e)),
+            }
+        }
+        if let Some(msg) = ui.ctx().data(|d| d.get_temp::<String>(id)) {
+            ui.label(RichText::new(msg).small());
+        }
+    });
+    done
 }
 
 const LOCKED: &str = " [x]";
 
 /// The label as shown: the marker of a folder without write access becomes words.
 pub(crate) fn dir_label(lang: crate::i18n::Lang, label: &str) -> String {
-    match label.strip_suffix(LOCKED) {
-        Some(l) => format!("{l} - {}", t(lang, "bench_locked")),
-        None => label.to_string(),
+    if let Some(l) = label.strip_suffix(LOCKED) {
+        format!("{l} - {}", t(lang, "bench_locked"))
+    } else if let Some(l) = label.strip_suffix(UNMOUNTED) {
+        format!("{l} - {}", t(lang, "bench_unmounted"))
+    } else {
+        label.to_string()
     }
 }
 
@@ -178,6 +221,19 @@ impl App {
         if let Some(docs) = crate::platform::documents_dir() {
             add(docs.clone(), docs.display().to_string(), &mut out);
         }
+        // Partitions that are not mounted (a USB stick just plugged in): offered with a Mount button.
+        #[cfg(target_os = "linux")]
+        for d in &self.disks {
+            for p in &d.partitions {
+                let fs = p.fs.as_str();
+                let skip = fs.is_empty() || ["swap", "LVM", "raid", "crypto", "zfs_member"].iter().any(|k| fs.contains(k)) || p.kind.contains("EFI System");
+                if p.mounts.is_empty() && !skip && !p.name.is_empty() {
+                    let dev = PathBuf::from(format!("/dev/{}", p.name));
+                    let size = self.bytes_text(p.size);
+                    out.push((dev.clone(), format!("{} — {} ({fs}, {size}){UNMOUNTED}", dev.display(), d.model)));
+                }
+            }
+        }
         out
     }
 
@@ -214,6 +270,7 @@ impl App {
         let mut start = std::mem::take(&mut b.auto_start);
         let mut stop = false;
         let mut refresh = false;
+        let mut mounted: Option<PathBuf> = None;
         let mut copy: Option<String> = None;
         let mut open = true;
         let (read_w, write_w) = (t(lang, "bench_read"), t(lang, "bench_write"));
@@ -239,6 +296,9 @@ impl App {
                             }
                         });
                         ui.end_row();
+                        if let Some(p) = mount_row(ui, lang, b.dirs.get(b.dir_idx)) {
+                            mounted = Some(p);
+                        }
 
                         ui.label(t(lang, "bench_profile"));
                         egui::ComboBox::from_id_salt("bench_profile")
@@ -363,6 +423,10 @@ impl App {
                 ui.label(RichText::new(t(lang, "bench_note_threads")).small().color(pal.muted));
             });
 
+        if let Some(p) = mounted {
+            b.dirs = self.bench_folders();
+            b.dir_idx = b.dirs.iter().position(|d| d.0 == p).unwrap_or(0);
+        }
         if refresh {
             b.dirs = self.bench_folders();
             b.dir_idx = b.dir_idx.min(b.dirs.len().saturating_sub(1));

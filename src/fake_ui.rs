@@ -88,6 +88,7 @@ impl App {
         let mut start = std::mem::take(&mut f.auto_start);
         let mut stop = false;
         let mut refresh = false;
+        let mut mounted: Option<PathBuf> = None;
         let mut open = true;
         let gb = |b: u64| self.decimal(format!("{:.2}", b as f64 / 1e9)) + " GB";
         let free_now: Option<u64> = f.dirs.get(f.dir_idx).and_then(|d| crate::platform::free_bytes(&d.0));
@@ -115,6 +116,9 @@ impl App {
                             }
                         });
                         ui.end_row();
+                        if let Some(p) = crate::bench_ui::mount_row(ui, lang, f.dirs.get(f.dir_idx)) {
+                            mounted = Some(p);
+                        }
                         ui.label(t(lang, "fake_mode"));
                         ui.horizontal(|ui| {
                             ui.selectable_value(&mut f.quick, true, t(lang, "fake_mode_quick"));
@@ -255,6 +259,10 @@ impl App {
                 ui.label(RichText::new(t(lang, "fake_note")).small().color(pal.muted));
             });
 
+        if let Some(p) = mounted {
+            f.dirs = self.bench_folders();
+            f.dir_idx = f.dirs.iter().position(|d| d.0 == p).unwrap_or(0);
+        }
         if refresh {
             f.dirs = self.bench_folders();
             f.dir_idx = f.dir_idx.min(f.dirs.len().saturating_sub(1));
