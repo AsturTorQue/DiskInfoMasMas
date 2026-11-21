@@ -98,7 +98,7 @@ impl App {
             }
         });
         let mut matched = vec![false; dirs.len()];
-        egui::ScrollArea::vertical().max_height(250.0).auto_shrink([false, true]).show(ui, |ui| {
+        egui::ScrollArea::vertical().max_height(ui.ctx().screen_rect().height() * 0.32).auto_shrink([false, true]).show(ui, |ui| {
             for d in &self.disks {
                 if d.partitions.is_empty() {
                     continue;

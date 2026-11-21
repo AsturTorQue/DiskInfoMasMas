@@ -279,12 +279,11 @@ impl App {
             .open(&mut open)
             .resizable(true)
             .collapsible(false)
-            .default_width(640.0)
+            .default_width(680.0_f32.min(ctx.screen_rect().width() * 0.94))
             .min_width(520.0)
-            .max_width(700.0)
+            .max_width(ctx.screen_rect().width() * 0.96)
             .vscroll(true)
             .show(ctx, |ui| {
-                ui.set_max_width(660.0);
                 ui.add_enabled_ui(!running, |ui| {
                     if self.drive_picker(ui, &b.dirs, &mut b.dir_idx, crate::drive_picker::PickMode::Speed) {
                         refresh = true;

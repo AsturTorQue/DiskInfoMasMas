@@ -127,12 +127,11 @@ impl App {
             .open(&mut open)
             .resizable(true)
             .collapsible(false)
-            .default_width(640.0)
+            .default_width(680.0_f32.min(ctx.screen_rect().width() * 0.94))
             .min_width(520.0)
-            .max_width(700.0)
+            .max_width(ctx.screen_rect().width() * 0.96)
             .vscroll(true)
             .show(ctx, |ui| {
-                ui.set_max_width(660.0);
                 ui.label(t(lang, "fake_intro"));
                 ui.add_space(6.0);
                 ui.add_enabled_ui(!running, |ui| {
