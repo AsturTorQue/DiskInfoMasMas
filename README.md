@@ -72,10 +72,10 @@ When the system already has `smartctl`, that one is used.
   the folder you pick (deleted afterwards) and bypasses the system cache. Queue depth and threads
   are emulated with Q×T worker threads, so numbers compare well between disks but can differ a bit
   from CrystalDiskMark's. Also from the terminal: `diskinfo bench --path DIR --size 1G`.
-- **Fake drive test** (Function → Check if the drive is fake…): fills the free space of a USB stick,
+- **Fake drive test** (Function → Check if the drive is fake…), with a quick mode (a few hundred blocks spread over the whole free space, ValiDrive-style, about a minute) and a full mode (every block, H2testw-style): fills the free space of a USB stick,
   card or SSD with unique blocks, reads them back and tells whether it is genuine, faulty or a fake
   that holds less than it claims (with the estimated real capacity). Only conclusive when it checks
-  (nearly) all the free space. Also from the terminal: `diskinfo fakecheck --path DIR --percent 100`.
+  (nearly) all the free space. Also from the terminal: `diskinfo fakecheck --path DIR --quick` or `--percent 100`.
 - **Start with the system** (File menu): starts minimised when you log in, so the history keeps
   growing and alerts keep coming without opening the window.
 - **Save the report** as a text file or the window as a picture (Edit menu; saved in Documents).
@@ -104,7 +104,7 @@ diskinfo partitions [DISK]        # partitions, btrfs subvolumes, LUKS/LVM…
 diskinfo json [DISK]              # everything as JSON
 diskinfo selftest short|long DISK # start a self-test
 diskinfo bench --path DIR [--size 1G] [--runs 1] [--time 5] [--data random|zero|ones] [--profile nvme|default]
-diskinfo fakecheck --path DIR [--percent 100 | --size 1G]
+diskinfo fakecheck --path DIR [--quick | --percent 100 | --size 1G]
 diskinfo help
 ```
 

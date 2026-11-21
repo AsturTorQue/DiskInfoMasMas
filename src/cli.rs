@@ -36,6 +36,9 @@ pub fn run(args: &[String]) -> i32 {
                     settings.language = l;
                 }
             }
+            "--quick" => {
+                bench_opts.insert("quick".into(), String::new());
+            }
             "--path" | "--size" | "--percent" | "--runs" | "--time" | "--interval" | "--data" | "--profile" => {
                 if let Some(v) = it.next() {
                     bench_opts.insert(a.trim_start_matches("--").to_string(), v.clone());
@@ -538,7 +541,8 @@ fn fakecheck_command(o: &std::collections::HashMap<String, String>, json_out: bo
         eprintln!("{}", t(lang, "bench_bad_size"));
         return 2;
     }
-    let h = fakecheck::start(fakecheck::Config { dir, bytes });
+    let quick = o.contains_key("quick");
+    let h = fakecheck::start(fakecheck::Config { dir, bytes, quick });
     let mut last = 0u64;
     loop {
         std::thread::sleep(std::time::Duration::from_millis(500));
@@ -574,10 +578,13 @@ fn fakecheck_command(o: &std::collections::HashMap<String, String>, json_out: bo
                     };
                     println!("{title}");
                     println!("{} MiB, {} {}", tested >> 20, s.bad_count, t(lang, "fake_blocks_bad"));
+                    if s.quick && word == "genuine" {
+                        eprintln!("{}", t(lang, "fake_quick_note"));
+                    }
                     if let Some(r) = real {
                         println!("{} {} MiB", t(lang, "fake_real"), r >> 20);
                     }
-                    if free > 0 && tested * 10 < free * 9 {
+                    if !s.quick && free > 0 && tested * 10 < free * 9 {
                         eprintln!("{}", t(lang, "fake_partial_note"));
                     }
                 }
@@ -595,7 +602,7 @@ fn fakecheck_command(o: &std::collections::HashMap<String, String>, json_out: bo
 
 fn help_text(lang: Lang) -> String {
     format!(
-        "{name} {ver}\n\n{usage}:\n  diskinfo                         {gui}\n  diskinfo list                    {list}\n  diskinfo health                  {health}\n  diskinfo show [DISK]             {show}\n  diskinfo partitions [DISK]       {parts}\n  diskinfo json [DISK]             {json}\n  diskinfo selftest short|long DISK  {test}\n  diskinfo bench [--path DIR] [--size 1G] [--runs N] [--time S] [--data random|zero|ones] [--profile nvme|default]\n                                   {bench}\n  diskinfo fakecheck [--path DIR] [--percent 100 | --size 1G]\n                                   {fake}\n  diskinfo help | version\n\n{opts}:\n  -a, --admin       {admin}\n  -j, --json        {jsonopt}\n  --lang es|en|pt|fr|de|it\n\nDISK: 1, 2… | sda | /dev/nvme0n1 | PhysicalDrive0 | {serial}\n{exit}: 0 = {good}, 1 = {caution}, 2 = {bad}, 3 = {unknown}\n",
+        "{name} {ver}\n\n{usage}:\n  diskinfo                         {gui}\n  diskinfo list                    {list}\n  diskinfo health                  {health}\n  diskinfo show [DISK]             {show}\n  diskinfo partitions [DISK]       {parts}\n  diskinfo json [DISK]             {json}\n  diskinfo selftest short|long DISK  {test}\n  diskinfo bench [--path DIR] [--size 1G] [--runs N] [--time S] [--data random|zero|ones] [--profile nvme|default]\n                                   {bench}\n  diskinfo fakecheck [--path DIR] [--quick | --percent 100 | --size 1G]\n                                   {fake}\n  diskinfo help | version\n\n{opts}:\n  -a, --admin       {admin}\n  -j, --json        {jsonopt}\n  --lang es|en|pt|fr|de|it\n\nDISK: 1, 2… | sda | /dev/nvme0n1 | PhysicalDrive0 | {serial}\n{exit}: 0 = {good}, 1 = {caution}, 2 = {bad}, 3 = {unknown}\n",
         name = crate::APP_NAME,
         ver = env!("CARGO_PKG_VERSION"),
         usage = t(lang, "cli_usage"),

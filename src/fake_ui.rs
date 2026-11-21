@@ -16,6 +16,8 @@ pub struct FakeUi {
     pub dirs: Vec<(PathBuf, String)>,
     pub dir_idx: usize,
     pub pct_idx: usize,
+    /// Quick mode (samples over the whole space) instead of the full test.
+    pub quick: bool,
     pub handle: Option<fakecheck::Handle>,
     pub last: Option<State>,
     /// What the drive claims to hold, and what was free when the test began.
@@ -27,7 +29,7 @@ pub struct FakeUi {
 
 impl Default for FakeUi {
     fn default() -> Self {
-        FakeUi { open: false, dirs: Vec::new(), dir_idx: 0, pct_idx: 1, handle: None, last: None, claimed: None, free_at_start: 0, auto_start: false }
+        FakeUi { open: false, dirs: Vec::new(), dir_idx: 0, pct_idx: 1, quick: true, handle: None, last: None, claimed: None, free_at_start: 0, auto_start: false }
     }
 }
 
@@ -113,6 +115,13 @@ impl App {
                             }
                         });
                         ui.end_row();
+                        ui.label(t(lang, "fake_mode"));
+                        ui.horizontal(|ui| {
+                            ui.selectable_value(&mut f.quick, true, t(lang, "fake_mode_quick"));
+                            ui.selectable_value(&mut f.quick, false, t(lang, "fake_mode_full"));
+                        });
+                        ui.end_row();
+                        if !f.quick {
                         ui.label(t(lang, "fake_amount"));
                         ui.horizontal(|ui| {
                             let pct = PERCENTS[f.pct_idx];
@@ -129,9 +138,13 @@ impl App {
                             }
                         });
                         ui.end_row();
+                        }
                     });
                 });
-                if PERCENTS[f.pct_idx] >= 50 && !running {
+                if f.quick {
+                    ui.label(RichText::new(t(lang, "fake_quick_hint")).color(pal.muted));
+                }
+                if !f.quick && PERCENTS[f.pct_idx] >= 50 && !running {
                     ui.label(RichText::new(t(lang, "fake_pct_warn")).color(pal.caution));
                 }
                 ui.add_space(6.0);
@@ -164,7 +177,7 @@ impl App {
 
                     // The verdict.
                     if let Some(v) = &s.verdict {
-                        let tested = s.written * BLOCK as u64;
+                        let tested = if s.quick { f.free_at_start } else { s.written * BLOCK as u64 };
                         let (title, detail, color) = match v {
                             Verdict::Genuine => (
                                 t(lang, "fake_v_genuine").to_string(),
@@ -192,7 +205,10 @@ impl App {
                             ui.label(RichText::new(detail).color(egui::Color32::WHITE));
                         });
                         // A genuine result on a part of the space proves only that part.
-                        if matches!(v, Verdict::Genuine) && f.free_at_start > 0 && tested * 10 < f.free_at_start * 9 {
+                        if matches!(v, Verdict::Genuine) && s.quick {
+                            ui.add_space(4.0);
+                            ui.label(RichText::new(t(lang, "fake_quick_note")).color(pal.caution));
+                        } else if matches!(v, Verdict::Genuine) && f.free_at_start > 0 && tested * 10 < f.free_at_start * 9 {
                             ui.add_space(4.0);
                             ui.label(RichText::new(t(lang, "fake_partial_note")).color(pal.caution));
                         }
@@ -250,12 +266,12 @@ impl App {
         }
         if start {
             if let (Some((dir, _)), Some(free)) = (f.dirs.get(f.dir_idx), free_now) {
-                let bytes = amount(free, PERCENTS[f.pct_idx]);
+                let bytes = amount(free, if f.quick { 100 } else { PERCENTS[f.pct_idx] });
                 if bytes >= 8 * BLOCK as u64 {
                     f.claimed = self.claimed_capacity(dir);
                     f.free_at_start = free;
                     f.last = None;
-                    f.handle = Some(fakecheck::start(fakecheck::Config { dir: dir.clone(), bytes }));
+                    f.handle = Some(fakecheck::start(fakecheck::Config { dir: dir.clone(), bytes, quick: f.quick }));
                 }
             }
         }

@@ -29,8 +29,12 @@ const MAX_LISTED: usize = 40;
 pub struct Config {
     /// Folder (on the drive to test) where the test files are made.
     pub dir: PathBuf,
-    /// How much to write and check; rounded down to whole MiB.
+    /// How much to write and check; rounded down to whole MiB. In quick mode: how much space
+    /// the samples are spread over.
     pub bytes: u64,
+    /// Quick mode (like ValiDrive): a few hundred blocks spread evenly over the whole space
+    /// instead of every block.
+    pub quick: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -92,6 +96,8 @@ pub struct State {
     /// The system cache is bypassed (otherwise reading back may come from memory).
     pub direct: bool,
     pub verdict: Option<Verdict>,
+    /// Quick mode: `total`, `written` and `verified` count sample blocks, not the whole space.
+    pub quick: bool,
 }
 
 impl State {
@@ -99,7 +105,7 @@ impl State {
         State {
             phase: Phase::Idle,
             fraction: 0.0,
-            total: cfg.bytes / BLOCK as u64,
+            total: plan(cfg).len() as u64,
             written: 0,
             verified: 0,
             write_avg: 0.0,
@@ -111,6 +117,7 @@ impl State {
             ran_full: false,
             direct: true,
             verdict: None,
+            quick: cfg.quick,
         }
     }
 
@@ -136,6 +143,44 @@ pub fn start(cfg: Config) -> Handle {
 
 fn update(state: &Shared, f: impl FnOnce(&mut State)) {
     f(&mut state.lock().unwrap_or_else(|e| e.into_inner()));
+}
+
+/// Samples in quick mode (more on very big drives, up to one per GiB).
+const QUICK_SAMPLES: u64 = 256;
+
+/// The block numbers to write and check, in order. Everything for the full test; for the quick
+/// one, blocks evenly spread (the step is a power of two, so the spots a wrapping fake drive
+/// folds onto one another are also spots that are tested) plus the very last block.
+pub fn plan(cfg: &Config) -> Vec<u64> {
+    let total = cfg.bytes / BLOCK as u64;
+    if !cfg.quick {
+        return (0..total).collect();
+    }
+    let mut stride = 1u64;
+    while stride * 2 <= (total / QUICK_SAMPLES).max(1) && stride * 2 <= BLOCKS_PER_FILE {
+        stride *= 2;
+    }
+    let mut v: Vec<u64> = (0..total).step_by(stride as usize).collect();
+    if total > 0 && v.last() != Some(&(total - 1)) {
+        v.push(total - 1);
+    }
+    v
+}
+
+/// Reserves the space of a file so its blocks sit all over the drive (quick mode).
+fn preallocate(file: &std::fs::File, bytes: u64) -> io::Result<()> {
+    #[cfg(target_os = "linux")]
+    {
+        use std::os::fd::AsRawFd;
+        // SAFETY: a valid descriptor and plain numbers.
+        let r = unsafe { libc::posix_fallocate(file.as_raw_fd(), 0, bytes as libc::off_t) };
+        match r {
+            0 => return Ok(()),
+            28 => return Err(io::Error::from_raw_os_error(28)),
+            _ => {}
+        }
+    }
+    file.set_len(bytes)
 }
 
 // ------------------------------------------------------------------------- the pattern
@@ -236,31 +281,47 @@ fn disk_full(e: &io::Error) -> bool {
 
 // ------------------------------------------------------------------------- the two phases
 
-/// Writes the blocks. Returns how many were written (None when cancelled).
-pub fn write_phase(cfg: &Config, state: &Shared, cancel: &AtomicBool, files: &mut Files, seed: u64) -> io::Result<Option<u64>> {
-    let total = cfg.bytes / BLOCK as u64;
+/// Blocks a test file holds (the last one may be shorter).
+fn blocks_in_file(cfg: &Config, n: u64) -> u64 {
+    (cfg.bytes / BLOCK as u64).saturating_sub(n * BLOCKS_PER_FILE).min(BLOCKS_PER_FILE)
+}
+
+/// Writes the blocks of `plan`. Returns how many were written (None when cancelled).
+pub fn write_phase(cfg: &Config, plan: &[u64], state: &Shared, cancel: &AtomicBool, files: &mut Files, seed: u64) -> io::Result<Option<u64>> {
+    let total = plan.len() as u64;
     let mut buf = AlignedBuf::new(BLOCK);
     let mut meter = Meter::new();
-    let mut current: Option<std::fs::File> = None;
+    let mut current: Option<(u64, std::fs::File)> = None;
     let mut written = 0u64;
     let mut ran_full = false;
-    for i in 0..total {
+    for (k, &i) in plan.iter().enumerate() {
         if cancel.load(Ordering::Relaxed) {
             return Ok(None);
         }
-        if i % BLOCKS_PER_FILE == 0 {
-            if let Some(done) = current.take() {
+        let fno = i / BLOCKS_PER_FILE;
+        if current.as_ref().map(|c| c.0) != Some(fno) {
+            if let Some((_, done)) = current.take() {
                 done.sync_data()?;
             }
-            let (f, direct) = bench::create_direct_or_cached(&files.path(files.count))?;
-            files.count += 1;
-            if i == 0 {
+            let (f, direct) = bench::create_direct_or_cached(&files.path(fno))?;
+            files.count = files.count.max(fno + 1);
+            if k == 0 {
                 update(state, |s| s.direct = direct);
             }
-            current = Some(f);
+            if cfg.quick {
+                match preallocate(&f, blocks_in_file(cfg, fno) * BLOCK as u64) {
+                    Ok(()) => {}
+                    Err(e) if disk_full(&e) => {
+                        ran_full = true;
+                        break;
+                    }
+                    Err(e) => return Err(e),
+                }
+            }
+            current = Some((fno, f));
         }
         fill_block(buf.as_mut_slice(), seed, i);
-        let file = current.as_ref().expect("a file is open");
+        let file = &current.as_ref().expect("a file is open").1;
         match bench::write_full(file, &buf.as_slice()[..BLOCK], (i % BLOCKS_PER_FILE) * BLOCK as u64) {
             Ok(()) => {}
             Err(e) if disk_full(&e) => {
@@ -269,7 +330,7 @@ pub fn write_phase(cfg: &Config, state: &Shared, cancel: &AtomicBool, files: &mu
             }
             Err(e) => return Err(e),
         }
-        written = i + 1;
+        written = k as u64 + 1;
         meter.add(BLOCK as u64);
         if written % 8 == 0 || written == total {
             let f = 0.5 * written as f32 / total.max(1) as f32;
@@ -279,7 +340,7 @@ pub fn write_phase(cfg: &Config, state: &Shared, cancel: &AtomicBool, files: &mu
             });
         }
     }
-    if let Some(done) = current.take() {
+    if let Some((_, done)) = current.take() {
         done.sync_data()?;
     }
     let (avg, min) = meter.result();
@@ -293,20 +354,21 @@ pub fn write_phase(cfg: &Config, state: &Shared, cancel: &AtomicBool, files: &mu
     Ok(Some(written))
 }
 
-/// Reads every block back and counts the ones that are not as written. Returns None if cancelled.
-pub fn verify_phase(state: &Shared, cancel: &AtomicBool, files: &Files, written: u64, seed: u64) -> io::Result<Option<()>> {
+/// Reads the first `written` blocks of `plan` back and counts the ones that are not as written.
+/// Returns None if cancelled.
+pub fn verify_phase(state: &Shared, plan: &[u64], cancel: &AtomicBool, files: &Files, written: u64, seed: u64) -> io::Result<Option<()>> {
     let direct = state.lock().unwrap_or_else(|e| e.into_inner()).direct;
     let mut found = AlignedBuf::new(BLOCK);
     let mut expected = AlignedBuf::new(BLOCK);
     let mut meter = Meter::new();
-    let mut current: Option<std::fs::File> = None;
-    for i in 0..written {
+    let mut current: Option<(u64, std::fs::File)> = None;
+    for (k, &i) in plan.iter().take(written as usize).enumerate() {
         if cancel.load(Ordering::Relaxed) {
             return Ok(None);
         }
-        if i % BLOCKS_PER_FILE == 0 {
-            let path = files.path(i / BLOCKS_PER_FILE);
-            let f = bench::open_existing(&path, direct)?;
+        let fno = i / BLOCKS_PER_FILE;
+        if current.as_ref().map(|c| c.0) != Some(fno) {
+            let f = bench::open_existing(&files.path(fno), direct)?;
             #[cfg(target_os = "linux")]
             if !direct {
                 // Without direct I/O, ask the system to forget what it still remembers of the file.
@@ -316,9 +378,9 @@ pub fn verify_phase(state: &Shared, cancel: &AtomicBool, files: &Files, written:
                     libc::posix_fadvise(f.as_raw_fd(), 0, 0, libc::POSIX_FADV_DONTNEED);
                 }
             }
-            current = Some(f);
+            current = Some((fno, f));
         }
-        let file = current.as_ref().expect("a file is open");
+        let file = &current.as_ref().expect("a file is open").1;
         let read = bench::read_full(file, &mut found.as_mut_slice()[..BLOCK], (i % BLOCKS_PER_FILE) * BLOCK as u64);
         fill_block(expected.as_mut_slice(), seed, i);
         let kind = match read {
@@ -328,7 +390,7 @@ pub fn verify_phase(state: &Shared, cancel: &AtomicBool, files: &Files, written:
             Err(_) => Some(BlockKind::Empty),
         };
         meter.add(BLOCK as u64);
-        let verified = i + 1;
+        let verified = k as u64 + 1;
         let f = 0.5 + 0.5 * verified as f32 / written.max(1) as f32;
         update(state, |s| {
             s.verified = verified;
@@ -355,8 +417,18 @@ pub fn judge(s: &State) -> Verdict {
         return if s.direct { Verdict::Genuine } else { Verdict::Unreliable };
     }
     let overwritten = s.bad.iter().any(|b| matches!(b.kind, BlockKind::Overwritten(_)));
-    // Blocks that came back right are what the drive really holds.
-    let good = s.written.saturating_sub(s.bad_count);
+    // Blocks that came back right are what the drive really holds. In quick mode the samples
+    // are in order, so the first block that failed (or the first one that overwrote an older
+    // one) is about where the real data ends.
+    let good = if s.quick {
+        // An overwritten block i that now holds block o shows the drive wraps every o - i blocks.
+        s.bad.iter().map(|b| match b.kind {
+            BlockKind::Overwritten(o) => o.saturating_sub(b.index),
+            _ => b.index,
+        }).min().unwrap_or(0)
+    } else {
+        s.written.saturating_sub(s.bad_count)
+    };
     if overwritten || s.bad_count * 10 >= s.written.max(1) {
         Verdict::Fake { real_bytes: good * BLOCK as u64 }
     } else {
@@ -383,14 +455,15 @@ fn run_inner(cfg: &Config, state: &Shared, cancel: &AtomicBool) -> io::Result<bo
         return Err(io::Error::new(io::ErrorKind::InvalidInput, "the amount to test is too small"));
     }
     let seed = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos() as u64).unwrap_or(1) | 1;
+    let plan = plan(cfg);
     let mut files = Files::new(&cfg.dir);
     update(state, |s| s.phase = Phase::Writing);
-    let Some(written) = write_phase(cfg, state, cancel, &mut files, seed)? else { return Ok(false) };
+    let Some(written) = write_phase(cfg, &plan, state, cancel, &mut files, seed)? else { return Ok(false) };
     if written == 0 {
         return Err(io::Error::new(io::ErrorKind::StorageFull, "nothing could be written"));
     }
     update(state, |s| s.phase = Phase::Verifying);
-    Ok(verify_phase(state, cancel, &files, written, seed)?.is_some())
+    Ok(verify_phase(state, &plan, cancel, &files, written, seed)?.is_some())
 }
 
 #[cfg(test)]
@@ -405,8 +478,12 @@ mod tests {
     }
 
     fn setup(name: &str, mib: u64) -> (Config, Shared, AtomicBool, Files, PathBuf) {
+        setup_mode(name, mib, false)
+    }
+
+    fn setup_mode(name: &str, mib: u64, quick: bool) -> (Config, Shared, AtomicBool, Files, PathBuf) {
         let dir = temp_dir(name);
-        let cfg = Config { dir: dir.clone(), bytes: mib << 20 };
+        let cfg = Config { dir: dir.clone(), bytes: mib << 20, quick };
         let state = Arc::new(Mutex::new(State::new(&cfg)));
         let files = Files::new(&dir);
         (cfg, state, AtomicBool::new(false), files, dir)
@@ -414,12 +491,17 @@ mod tests {
 
     /// Writes, lets the test tamper with the first file (like a fake drive would), verifies.
     fn run_with(name: &str, mib: u64, tamper: impl FnOnce(&Path)) -> State {
-        let (cfg, state, cancel, mut files, dir) = setup(name, mib);
+        run_mode(name, mib, false, tamper)
+    }
+
+    fn run_mode(name: &str, mib: u64, quick: bool, tamper: impl FnOnce(&Path)) -> State {
+        let (cfg, state, cancel, mut files, dir) = setup_mode(name, mib, quick);
+        let plan = plan(&cfg);
         // The temp folder may be tmpfs (no direct I/O); the verdict logic is what is tested here.
-        let written = write_phase(&cfg, &state, &cancel, &mut files, 77).unwrap().unwrap();
-        assert_eq!(written, mib);
+        let written = write_phase(&cfg, &plan, &state, &cancel, &mut files, 77).unwrap().unwrap();
+        assert_eq!(written, plan.len() as u64);
         tamper(&files.path(0));
-        verify_phase(&state, &cancel, &files, written, 77).unwrap().unwrap();
+        verify_phase(&state, &plan, &cancel, &files, written, 77).unwrap().unwrap();
         drop(files);
         let _ = std::fs::remove_dir(&dir);
         let mut s = state.lock().unwrap().clone();
@@ -507,9 +589,60 @@ mod tests {
         let (cfg, state, cancel, files, dir) = setup("cancel", 8);
         cancel.store(true, Ordering::Relaxed);
         let mut files = files;
-        assert!(write_phase(&cfg, &state, &cancel, &mut files, 3).unwrap().is_none());
+        let plan = plan(&cfg);
+        assert!(write_phase(&cfg, &plan, &state, &cancel, &mut files, 3).unwrap().is_none());
         drop(files);
         assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 0);
         let _ = std::fs::remove_dir(&dir);
+    }
+
+    #[test]
+    fn the_quick_plan_spreads_over_the_whole_space() {
+        let cfg = Config { dir: PathBuf::new(), bytes: 512 << 20, quick: true };
+        let p = plan(&cfg);
+        assert_eq!(p[0], 0);
+        assert_eq!(*p.last().unwrap(), 511);
+        assert!(p.len() >= 256 && p.len() <= 260, "{}", p.len());
+        assert!(p.windows(2).all(|w| w[0] < w[1]));
+        let big = Config { dir: PathBuf::new(), bytes: 2000u64 << 30, quick: true };
+        assert!(plan(&big).len() < 4000);
+        assert_eq!(plan(&Config { quick: false, bytes: 5 << 20, ..cfg }), vec![0, 1, 2, 3, 4]);
+    }
+
+    #[test]
+    fn quick_mode_passes_a_good_drive() {
+        let s = run_mode("qgood", 512, true, |_| {});
+        assert_eq!(s.bad_count, 0);
+        assert_eq!(judge(&s), Verdict::Genuine);
+    }
+
+    #[test]
+    fn quick_mode_catches_a_wrapping_drive() {
+        // A drive of 256 MiB claiming 512: block i + 256 lands on top of block i.
+        let s = run_mode("qwrap", 512, true, |p| {
+            for i in (0..256).step_by(2) {
+                let later = block_bytes(p, i + 256);
+                put_block(p, i, &later);
+            }
+        });
+        assert!(s.bad_count > 100);
+        match judge(&s) {
+            Verdict::Fake { real_bytes } => assert_eq!(real_bytes, 256 << 20),
+            v => panic!("{v:?}"),
+        }
+    }
+
+    #[test]
+    fn quick_mode_catches_discarded_writes() {
+        // Everything past 100 MiB reads back as zeros.
+        let s = run_mode("qzero", 512, true, |p| {
+            for i in (100..512).step_by(2) {
+                put_block(p, i, &vec![0u8; BLOCK]);
+            }
+        });
+        match judge(&s) {
+            Verdict::Fake { real_bytes } => assert!((98 << 20..=102 << 20).contains(&real_bytes), "{real_bytes}"),
+            v => panic!("{v:?}"),
+        }
     }
 }
