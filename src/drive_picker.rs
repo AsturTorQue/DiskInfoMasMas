@@ -91,19 +91,40 @@ impl App {
         let lang = self.settings.language;
         let pal = self.pal();
         let mut refresh = false;
+        // For the fake-drive test only drives that can be tested are shown, unless asked for all.
+        let all_id = egui::Id::new("pick_show_all");
+        let mut all = mode == PickMode::Speed || ui.ctx().data(|d| d.get_temp::<bool>(all_id)).unwrap_or(false);
         ui.horizontal(|ui| {
             ui.label(RichText::new(t(lang, "pick_title")).strong());
             if ui.button("⟳").on_hover_text(t(lang, "bench_refresh")).clicked() {
                 refresh = true;
             }
+            if mode != PickMode::Speed && ui.checkbox(&mut all, t(lang, "pick_show_all")).changed() {
+                ui.ctx().data_mut(|d| d.insert_temp(all_id, all));
+            }
         });
+        // Removable drives first, then other drives, the system's own last.
+        let mut disks: Vec<&Disk> = self.disks.iter().collect();
+        disks.sort_by_key(|d| (is_system_disk(d), !removable(d)));
+        let mut shown_any = false;
+        let mut visible: Vec<usize> = Vec::new();
         let mut matched = vec![false; dirs.len()];
         egui::ScrollArea::vertical().max_height((ui.ctx().screen_rect().height() * 0.88 - reserve).max(200.0)).auto_shrink([false, true]).show(ui, |ui| {
-            for d in &self.disks {
+            for d in disks {
                 if d.partitions.is_empty() {
                     continue;
                 }
                 let system = is_system_disk(d);
+                if system && !all {
+                    // Its folders still count as taken, so they do not show up as "other folders".
+                    for p in &d.partitions {
+                        if let Some(i) = entry_of(p, dirs) {
+                            matched[i] = true;
+                        }
+                    }
+                    continue;
+                }
+                shown_any = true;
                 egui::Frame::new().stroke(Stroke::new(1.0_f32, pal.stroke)).corner_radius(6).inner_margin(8).show(ui, |ui| {
                     ui.set_width(ui.available_width());
                     // Header: model, device, size and what kind of disk it is.
@@ -112,6 +133,7 @@ impl App {
                         match whole.filter(|w| mode == PickMode::FakeQuick && self.raw_target(&dirs[*w].0).is_some()) {
                             Some(w) => {
                                 // The whole drive can be chosen for the quick test.
+                                visible.push(w);
                                 let text = RichText::new(format!("{} - {}", d.model, t(lang, "pick_whole"))).strong();
                                 if ui.selectable_label(*idx == w, text).clicked() {
                                     *idx = w;
@@ -175,6 +197,12 @@ impl App {
                             matched[i] = true;
                         }
                         let access = access_of(entry, dirs);
+                        if access == Access::None && !all {
+                            continue; // no file system: nothing to test
+                        }
+                        if let Some(i) = entry {
+                            visible.push(i);
+                        }
                         let (status, color) = match access {
                             Access::Ready => (t(lang, "pick_ok"), pal.good),
                             Access::Locked => (t(lang, "pick_locked"), pal.bad),
@@ -198,7 +226,10 @@ impl App {
                 ui.add_space(4.0);
             }
             // Folders that belong to no listed disk (the documents folder, other mounts).
-            let others: Vec<usize> = (0..dirs.len()).filter(|i| !matched[*i] && !dirs[*i].0.starts_with("/dev/")).collect();
+            let others: Vec<usize> = if all { (0..dirs.len()).filter(|i| !matched[*i] && !dirs[*i].0.starts_with("/dev/")).collect() } else { Vec::new() };
+            if !shown_any {
+                ui.label(RichText::new(t(lang, "pick_empty")).color(pal.muted));
+            }
             if !others.is_empty() {
                 ui.label(RichText::new(t(lang, "pick_others")).strong());
                 for i in others {
@@ -217,6 +248,10 @@ impl App {
             }
         });
 
+        // If the chosen entry is hidden by the filter, move to the first one that is shown.
+        if !all && !visible.is_empty() && !visible.contains(idx) {
+            *idx = visible[0];
+        }
         // What the test will do with the chosen entry.
         if let Some((dir, _)) = dirs.get(*idx) {
             let (text, color) = self.pick_will(dir, dirs.get(*idx).map(|d| d.1.as_str()).unwrap_or(""), mode);
