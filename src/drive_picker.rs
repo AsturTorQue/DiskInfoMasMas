@@ -87,7 +87,7 @@ impl App {
     }
 
     /// Draws the panel. Returns true when the refresh button was pressed.
-    pub(crate) fn drive_picker(&self, ui: &mut egui::Ui, dirs: &[(PathBuf, String)], idx: &mut usize, mode: PickMode) -> bool {
+    pub(crate) fn drive_picker(&self, ui: &mut egui::Ui, dirs: &[(PathBuf, String)], idx: &mut usize, mode: PickMode, reserve: f32) -> bool {
         let lang = self.settings.language;
         let pal = self.pal();
         let mut refresh = false;
@@ -98,7 +98,7 @@ impl App {
             }
         });
         let mut matched = vec![false; dirs.len()];
-        egui::ScrollArea::vertical().max_height(ui.ctx().screen_rect().height() * 0.32).auto_shrink([false, true]).show(ui, |ui| {
+        egui::ScrollArea::vertical().max_height((ui.ctx().screen_rect().height() * 0.88 - reserve).max(200.0)).auto_shrink([false, true]).show(ui, |ui| {
             for d in &self.disks {
                 if d.partitions.is_empty() {
                     continue;

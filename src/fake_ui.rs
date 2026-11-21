@@ -131,12 +131,13 @@ impl App {
             .min_width(520.0)
             .max_width(ctx.screen_rect().width() * 0.96)
             .vscroll(true)
+            .default_height(ctx.screen_rect().height() * 0.88)
             .show(ctx, |ui| {
                 ui.label(t(lang, "fake_intro"));
                 ui.add_space(6.0);
                 ui.add_enabled_ui(!running, |ui| {
                     let mode = if f.quick { crate::drive_picker::PickMode::FakeQuick } else { crate::drive_picker::PickMode::FakeFull };
-                    if self.drive_picker(ui, &f.dirs, &mut f.dir_idx, mode) {
+                    if self.drive_picker(ui, &f.dirs, &mut f.dir_idx, mode, 400.0) {
                         refresh = true;
                     }
                     if let Some(p) = crate::bench_ui::mount_row(ui, lang, f.dirs.get(f.dir_idx)) {

@@ -283,9 +283,10 @@ impl App {
             .min_width(520.0)
             .max_width(ctx.screen_rect().width() * 0.96)
             .vscroll(true)
+            .default_height(ctx.screen_rect().height() * 0.88)
             .show(ctx, |ui| {
                 ui.add_enabled_ui(!running, |ui| {
-                    if self.drive_picker(ui, &b.dirs, &mut b.dir_idx, crate::drive_picker::PickMode::Speed) {
+                    if self.drive_picker(ui, &b.dirs, &mut b.dir_idx, crate::drive_picker::PickMode::Speed, 330.0) {
                         refresh = true;
                     }
                     if let Some(p) = mount_row(ui, lang, b.dirs.get(b.dir_idx)) {
