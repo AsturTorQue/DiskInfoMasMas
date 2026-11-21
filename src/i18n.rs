@@ -396,6 +396,12 @@ const TEXTS: &[(&str, [&str; 6])] = &[
     // Speed test (CrystalDiskMark style).
     ("cli_bench", ["prueba de velocidad (lectura/escritura) en una carpeta del disco", "speed test (read/write) in a folder of the disk", "teste de velocidade (leitura/gravação) numa pasta do disco", "test de vitesse (lecture/écriture) dans un dossier du disque", "Geschwindigkeitstest (Lesen/Schreiben) in einem Ordner des Laufwerks", "test di velocità (lettura/scrittura) in una cartella del disco"]),
     // Is this drive real? (fake capacity test)
+    ("why_title", ["Motivo", "Reason", "Motivo", "Raison", "Grund", "Motivo"]),
+    ("why_count", ["límite", "limit", "limite", "limite", "Grenze", "limite"]),
+    ("why_thresh", ["por debajo del umbral del fabricante", "below the manufacturer's threshold", "abaixo do limiar do fabricante", "sous le seuil du fabricant", "unter dem Herstellerschwellenwert", "sotto la soglia del produttore"]),
+    ("why_life", ["vida restante, límite", "remaining life, limit", "vida restante, limite", "vie restante, limite", "Restlebensdauer, Grenze", "vita residua, limite"]),
+    ("why_spare", ["reserva por debajo del límite", "spare at or below its limit", "reserva abaixo do limite", "réserve sous la limite", "Reserve unter dem Limit", "riserva sotto il limite"]),
+    ("why_critical", ["aviso crítico del disco", "critical warning from the drive", "aviso crítico da unidade", "avertissement critique du disque", "kritische Warnung des Laufwerks", "avviso critico dell'unità"]),
     ("fake_menu", ["Comprobar si la unidad es falsa…", "Check if the drive is fake…", "Verificar se a unidade é falsa…", "Vérifier si le disque est un faux…", "Prüfen, ob das Laufwerk gefälscht ist…", "Verifica se l'unità è contraffatta…"]),
     ("fake_title", ["Comprobar si la unidad es falsa", "Check if the drive is fake", "Verificar se a unidade é falsa", "Vérifier si le disque est un faux", "Prüfen, ob das Laufwerk gefälscht ist", "Verifica se l'unità è contraffatta"]),
     ("fake_intro", [

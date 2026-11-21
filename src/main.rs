@@ -375,6 +375,39 @@ impl App {
         })
     }
 
+    /// Why the health is not Good, in words ("05 Reallocated sectors: 8 (limit 1)").
+    fn health_reason(&self, d: &Disk) -> String {
+        if d.health == Status::Good || d.health == Status::Unknown {
+            return String::new();
+        }
+        let th = self.settings.thresholds_for(d);
+        d.health_why
+            .iter()
+            .map(|(kind, id, v)| {
+                let name = d.attrs.iter().find(|a| a.id == *id).map(|a| self.attr_name(d, a)).unwrap_or_default();
+                let limit = match (kind.as_str(), *id) {
+                    ("count", 0x05) => Some(th.t05 as i64),
+                    ("count", 0xC5) => Some(th.tc5 as i64),
+                    ("count", 0xC6) => Some(th.tc6 as i64),
+                    ("life", _) => Some(th.tff as i64),
+                    _ => None,
+                };
+                let rule = self.tr(match kind.as_str() {
+                    "count" => "why_count",
+                    "thresh" => "why_thresh",
+                    "life" => "why_life",
+                    "spare" => "why_spare",
+                    _ => "why_critical",
+                });
+                match limit {
+                    Some(l) => format!("{id:02X} {name}: {v} ({rule} {l})"),
+                    None => format!("{id:02X} {name}: {v} ({rule})"),
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
     fn health_text(&self, d: &Disk) -> String {
         match d.life {
             Some(l) if d.health != Status::Unknown => format!("{} ({l} %)", self.status_word(d.health)),
@@ -899,7 +932,12 @@ impl eframe::App for App {
                     if let (Some(l), true) = (d.life, d.health != Status::Unknown) {
                         lines.push((format!("{l} %"), 16.0));
                     }
-                    let health_tip = format!("{}\n\n{}", self.health_text(&d), self.tr("h_health"));
+                    let why = self.health_reason(&d);
+                    let health_tip = if why.is_empty() {
+                        format!("{}\n\n{}", self.health_text(&d), self.tr("h_health"))
+                    } else {
+                        format!("{}\n{}: {}\n\n{}", self.health_text(&d), self.tr("why_title"), why, self.tr("h_health"))
+                    };
                     status_box(ui, Vec2::new(128.0, 64.0), f, fg, &lines, &health_tip);
                     ui.add_space(8.0);
                     help_label(ui, self.tr("temperature"), self.tr("h_temperature"));

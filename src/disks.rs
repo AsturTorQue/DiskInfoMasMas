@@ -48,6 +48,8 @@ pub struct Disk {
     pub attrs: Vec<Attr>,
     pub life: Option<i32>,
     pub life_attr: Option<u16>,
+    /// What made the health Caution or Bad: (rule, attribute id, value). Filled by `health::evaluate`.
+    pub health_why: Vec<(String, u16, i64)>,
     pub nvme_critical: Option<u64>,
     pub nvme_spare: Option<i64>,
     pub nvme_spare_thresh: Option<i64>,
@@ -1004,6 +1006,17 @@ fn parse_ata(d: &mut Disk, j: &Value) {
     }
     d.host_reads_gb = reads;
     d.host_writes_gb = writes;
+    // Drives that do not report a rotation rate (some USB bridges, Windows drivers) but are
+    // plainly solid state must not be judged with the hard-disk rules.
+    if !d.is_ssd && d.rotation_rpm.is_none() {
+        let m = d.model.to_uppercase();
+        let has_wear = d.attrs.iter().any(|a| {
+            ["Percent_Lifetime_Remain", "SSD_Life_Left", "Media_Wearout_Indicator", "Wear_Leveling_Count"].iter().any(|n| a.name.contains(n))
+        });
+        if m.contains("SSD") || m.contains("SOLID STATE") || has_wear {
+            d.is_ssd = true;
+        }
+    }
     // Remaining life of an SSD: first known life attribute present (estimated choice).
     if d.is_ssd {
         let by_name = ["Percent_Lifetime_Remain", "SSD_Life_Left", "Media_Wearout_Indicator", "Remaining_Lifetime_Perc", "Wear_Leveling_Count"];

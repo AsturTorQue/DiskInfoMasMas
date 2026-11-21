@@ -41,6 +41,7 @@ pub fn evaluate(d: &mut Disk, th: &Thresholds) {
     for a in &mut d.attrs {
         a.status = Status::Good;
     }
+    d.health_why.clear();
     d.health = if is_virtual(&d.model) || !d.smart_read {
         Status::Unknown
     } else if d.is_nvme {
@@ -54,16 +55,19 @@ fn evaluate_nvme(d: &mut Disk, th: &Thresholds) -> Status {
     let mut result = Status::Good;
     if d.nvme_critical.unwrap_or(0) != 0 {
         mark(d, 0x01, Status::Bad);
+        d.health_why.push(("critical".into(), 0x01, d.nvme_critical.unwrap_or(0) as i64));
         return Status::Bad;
     }
     if let (Some(spare), Some(limit)) = (d.nvme_spare, d.nvme_spare_thresh) {
         if (1..=100).contains(&limit) {
             if spare < limit {
                 mark(d, 0x03, Status::Bad);
+                d.health_why.push(("spare".into(), 0x03, spare));
                 return Status::Bad;
             }
             if spare == limit && limit != 100 {
                 mark(d, 0x03, Status::Caution);
+                d.health_why.push(("spare".into(), 0x03, spare));
                 result = Status::Caution;
             }
         }
@@ -71,6 +75,7 @@ fn evaluate_nvme(d: &mut Disk, th: &Thresholds) -> Status {
     if let Some(life) = d.life {
         if life <= th.tff as i32 {
             mark(d, 0x05, Status::Caution);
+            d.health_why.push(("life".into(), 0x05, life as i64));
             result = Status::Caution;
         }
     }
@@ -84,11 +89,13 @@ fn evaluate_ata(d: &mut Disk, th: &Thresholds) -> Status {
     let mut bad = 0;
     let mut caution = false;
     let is_ssd = d.is_ssd;
+    let mut why: Vec<(String, u16, i64)> = Vec::new();
     for a in &mut d.attrs {
         if let (Some(cur), Some(t)) = (a.current, a.thresh) {
             if t != 0 && cur < t {
                 a.status = Status::Bad;
                 bad += 1;
+                why.push(("thresh".into(), a.id, cur as i64));
                 continue;
             }
         }
@@ -102,6 +109,7 @@ fn evaluate_ata(d: &mut Disk, th: &Thresholds) -> Status {
         if !is_ssd && limit != 0 && !all_ff && (a.raw & 0xFFFF) >= limit as u64 {
             a.status = Status::Caution;
             caution = true;
+            why.push(("count".into(), a.id, (a.raw & 0xFFFF) as i64));
         }
     }
     if is_ssd {
@@ -109,12 +117,15 @@ fn evaluate_ata(d: &mut Disk, th: &Thresholds) -> Status {
             if life == 0 {
                 mark(d, id, Status::Bad);
                 bad += 1;
+                why.push(("life".into(), id, life as i64));
             } else if life <= th.tff as i32 {
                 mark(d, id, Status::Caution);
                 caution = true;
+                why.push(("life".into(), id, life as i64));
             }
         }
     }
+    d.health_why = why;
     if bad > 0 {
         Status::Bad
     } else if caution {
