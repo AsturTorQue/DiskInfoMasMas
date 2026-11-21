@@ -287,18 +287,20 @@ impl App {
         let (read_w, write_w) = (t(lang, "bench_read"), t(lang, "bench_write"));
 
         egui::Window::new(t(lang, "bench_title").trim_end_matches('…'))
-            .id(egui::Id::new("bench_window_v3"))
+            .id(egui::Id::new("bench_window_v4"))
             .open(&mut open)
             .resizable(true)
             .collapsible(false)
-            .default_size([(ctx.screen_rect().width() * 0.9).min(1100.0), ctx.screen_rect().height() * 0.9])
-            .min_width(ctx.screen_rect().width().min(760.0) * 0.8)
+            .default_size([(ctx.screen_rect().width() * 0.9).min(1100.0).max((ctx.screen_rect().width() * 0.98).min(860.0)), ctx.screen_rect().height() * 0.9])
+            .min_width((ctx.screen_rect().width() * 0.95).min(780.0))
             .max_width(ctx.screen_rect().width() * 0.98)
             .vscroll(true)
             .show(ctx, |ui| {
-                // Two columns when the window is wide, one under the other when it is not.
-                let wide = ui.available_width() >= 900.0;
-                ui.columns(if wide { 2 } else { 1 }, |cols| {
+                // Drives on the left; mode, results and the rest on the right.
+                ui.columns(2, |cols| {
+                // What does not fit a column is cut, never drawn over the other one.
+                let clip = cols[0].max_rect().intersect(cols[0].clip_rect());
+                cols[0].set_clip_rect(clip);
                 cols[0].add_enabled_ui(!running, |ui| {
                     if self.drive_picker(ui, &b.dirs, &mut b.dir_idx, crate::drive_picker::PickMode::Speed, 80.0) {
                         refresh = true;
@@ -307,11 +309,9 @@ impl App {
                         mounted = Some(p);
                     }
                 });
-                let second = if wide { 1 } else { 0 };
-                let ui = &mut cols[second];
-                if !wide {
-                    ui.add_space(8.0);
-                }
+                let ui = &mut cols[1];
+                let clip = ui.max_rect().intersect(ui.clip_rect());
+                ui.set_clip_rect(clip);
                 ui.add_enabled_ui(!running, |ui| {
                     egui::Grid::new("bench_cfg").num_columns(2).spacing([12.0, 6.0]).show(ui, |ui| {
                         ui.label(t(lang, "bench_profile"));
