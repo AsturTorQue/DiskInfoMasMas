@@ -4,6 +4,10 @@ Done in 0.5.0 (taken from the official CrystalDiskInfo): hide serial numbers and
 table, interface size, English S.M.A.R.T. names, hide disks without S.M.A.R.T., save the report as
 text or picture, alert history, start with the system.
 
+Done in 0.6.0 (from CrystalDiskMark): disk speed test (4 tests, random/fill data, runs, duration).
+Not done from CrystalDiskMark: the mixed read/write tests, real asynchronous queues (DiskSpd/io_uring/IOCP
+instead of worker threads), a history of results and comparing two runs.
+
 Not done from the official CrystalDiskInfo:
 
 - **Tray icon** with a temperature icon per disk (needs a tray library on each system).

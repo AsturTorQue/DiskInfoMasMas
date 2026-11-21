@@ -5,6 +5,8 @@ mod demo;
 mod disks;
 mod alerts;
 mod autostart;
+mod bench;
+mod bench_ui;
 mod cli;
 mod health;
 mod history;
@@ -134,6 +136,8 @@ struct App {
     save_image: Option<ImageJob>,
     /// `--minimized`: minimise the window on the first frame (started at login).
     minimize_first: bool,
+    /// `--try-bench`: run a small speed test from the window, print it and quit.
+    try_bench: bool,
     /// `--try-save`: save the report as text and picture, then quit (to check saving works).
     try_save: Option<u32>,
     applied_theme: Option<Theme>,
@@ -150,6 +154,8 @@ struct App {
     /// Shared with the background monitor: history, alert log, what it read last.
     core: monitor::Shared,
     show_alerts: bool,
+    /// The disk speed test window.
+    bench: bench_ui::BenchUi,
     speeds: speed::Speeds,
     /// Which line the History tab draws.
     metric: Metric,
@@ -203,6 +209,7 @@ impl App {
             toast: None,
             save_image: None,
             try_save: None,
+            try_bench: false,
             minimize_first: false,
             applied_theme: None,
             passwordless: false,
@@ -220,6 +227,7 @@ impl App {
                 monitor::new(settings_for_core.clone(), hist, log)
             },
             show_alerts: false,
+            bench: bench_ui::BenchUi::default(),
             speeds: speed::start(),
             metric: Metric::Temperature,
             show_selftest: false,
@@ -665,6 +673,10 @@ impl eframe::App for App {
                     });
                     if cfg!(target_os = "linux") && ui.button(self.tr("pw_menu")).clicked() {
                         self.show_pw = true;
+                        ui.close_menu();
+                    }
+                    if ui.button(self.tr("bench_menu")).clicked() {
+                        self.bench_open();
                         ui.close_menu();
                     }
                     if ui.button(self.tr("selftest_menu")).clicked() {
@@ -1246,6 +1258,15 @@ impl eframe::App for App {
             }
         }
 
+        self.bench_window(ctx);
+        if self.try_bench {
+            ctx.request_repaint();
+            if let Some(last) = self.bench.last.as_ref().filter(|s| !s.running()) {
+                print!("{:?}\n{}", last.phase, bench::format_table(&last.results, "Read", "Write"));
+                self.try_bench = false;
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            }
+        }
         self.save_image_step(ctx);
         if let Some(n) = self.try_save {
             self.try_save = Some(n + 1);
@@ -1901,6 +1922,7 @@ fn main() -> eframe::Result<()> {
     let demo = args.iter().any(|a| a == "--demo");
     let tab = arg_value(&args, "--tab");
     let try_save = args.iter().any(|a| a == "--try-save");
+    let try_bench = args.iter().any(|a| a == "--try-bench");
     let open_window = arg_value(&args, "--open");
     let disk: Option<usize> = arg_value(&args, "--disk").and_then(|v| v.parse().ok());
     // Keep the login entry pointing at this program (an AppImage may have moved).
@@ -1965,6 +1987,20 @@ fn main() -> eframe::Result<()> {
             // --open alerts opens the alert history at start (handy for checking the layout).
             if open_window.as_deref() == Some("alerts") {
                 app.show_alerts = true;
+            }
+            if try_bench {
+                app.try_bench = true;
+                app.bench_open();
+                app.bench.size_idx = 0;
+                app.bench.secs = 1;
+                app.bench.interval = 0;
+                app.bench.auto_start = true;
+            }
+            if open_window.as_deref() == Some("bench") {
+                app.bench_open();
+                if demo {
+                    app.bench.last = Some(demo::demo_bench());
+                }
             }
             // --disk N shows the Nth disk first (counting from 1).
             if let Some(n) = disk.and_then(|n| n.checked_sub(1)) {

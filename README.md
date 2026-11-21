@@ -64,6 +64,14 @@ When the system already has `smartctl`, that one is used.
   Linux, the system player on Windows and macOS; switch it off or test it in the Function menu)
   and an **alert history** window. A background thread keeps reading the disks, recording the
   history and sending alerts even when the window is minimised or hidden.
+- **Disk speed test** (Function → Disk speed test…), in the style of
+  [CrystalDiskMark](https://github.com/hiyohiyo/CrystalDiskMark): sequential and random reads and
+  writes — `SEQ1M Q8T1`, `SEQ128K Q32T1`, `RND4K Q32T16`, `RND4K Q1T1` (or CrystalDiskMark's default
+  set) — with **random** or **fill** (0x00 / 0xFF) data, test size 16 MiB–64 GiB, runs, duration and
+  pause. Shows MB/s, IOPS and latency; the best of the runs is kept. It writes a temporary file in
+  the folder you pick (deleted afterwards) and bypasses the system cache. Queue depth and threads
+  are emulated with Q×T worker threads, so numbers compare well between disks but can differ a bit
+  from CrystalDiskMark's. Also from the terminal: `diskinfo bench --path DIR --size 1G`.
 - **Start with the system** (File menu): starts minimised when you log in, so the history keeps
   growing and alerts keep coming without opening the window.
 - **Save the report** as a text file or the window as a picture (Edit menu; saved in Documents).
@@ -91,6 +99,7 @@ diskinfo show [DISK]              # full report with S.M.A.R.T. attributes
 diskinfo partitions [DISK]        # partitions, btrfs subvolumes, LUKS/LVM…
 diskinfo json [DISK]              # everything as JSON
 diskinfo selftest short|long DISK # start a self-test
+diskinfo bench --path DIR [--size 1G] [--runs 1] [--time 5] [--data random|zero|ones] [--profile nvme|default]
 diskinfo help
 ```
 

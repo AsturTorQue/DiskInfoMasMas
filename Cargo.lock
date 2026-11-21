@@ -751,10 +751,11 @@ dependencies = [
 
 [[package]]
 name = "diskinfo"
-version = "0.5.1"
+version = "0.6.0"
 dependencies = [
  "eframe",
  "image",
+ "libc",
  "plist",
  "serde",
  "serde_json",

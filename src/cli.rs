@@ -6,7 +6,7 @@ use crate::i18n::{t, Lang};
 use crate::{health, Settings};
 use serde_json::{json, Value};
 
-const COMMANDS: [&str; 8] = ["list", "health", "show", "partitions", "json", "selftest", "help", "version"];
+const COMMANDS: [&str; 9] = ["list", "health", "show", "partitions", "json", "selftest", "bench", "help", "version"];
 
 /// True when the first argument is a command-line command (or --help / --version).
 pub fn wanted(args: &[String]) -> bool {
@@ -24,6 +24,8 @@ pub fn run(args: &[String]) -> i32 {
     let mut admin = false;
     let mut json_out = false;
     let mut rest: Vec<String> = Vec::new();
+    // Options of `bench` that take a value: --path, --size, --runs, --time, --interval, --data, --profile.
+    let mut bench_opts: std::collections::HashMap<String, String> = std::collections::HashMap::new();
     let mut it = args.iter().skip(1);
     while let Some(a) = it.next() {
         match a.as_str() {
@@ -32,6 +34,11 @@ pub fn run(args: &[String]) -> i32 {
             "--lang" => {
                 if let Some(l) = it.next().and_then(|v| lang_from(v)) {
                     settings.language = l;
+                }
+            }
+            "--path" | "--size" | "--runs" | "--time" | "--interval" | "--data" | "--profile" => {
+                if let Some(v) = it.next() {
+                    bench_opts.insert(a.trim_start_matches("--").to_string(), v.clone());
                 }
             }
             "-h" | "--help" => rest.insert(0, "help".into()),
@@ -80,6 +87,7 @@ pub fn run(args: &[String]) -> i32 {
             }
             exit_code(&list)
         }
+        "bench" => bench_command(&bench_opts, json_out, lang),
         "selftest" => {
             let (Some(kind), Some(sel)) = (rest.get(1), rest.get(2)) else {
                 eprintln!("{}", t(lang, "cli_selftest_usage"));
@@ -395,9 +403,117 @@ fn to_json(list: &[Disk], s: &Settings) -> Value {
     json!({ "version": env!("CARGO_PKG_VERSION"), "disks": disks })
 }
 
+/// "1G", "512M", "64m", "1073741824" → bytes.
+fn parse_size(v: &str) -> Option<u64> {
+    let v = v.trim().to_ascii_lowercase();
+    let (num, mult) = match v.chars().last()? {
+        'k' => (&v[..v.len() - 1], 1u64 << 10),
+        'm' => (&v[..v.len() - 1], 1 << 20),
+        'g' => (&v[..v.len() - 1], 1 << 30),
+        't' => (&v[..v.len() - 1], 1 << 40),
+        _ => (&v[..], 1),
+    };
+    num.trim().parse::<f64>().ok().map(|n| (n * mult as f64) as u64)
+}
+
+/// `diskinfo bench`: CrystalDiskMark-style speed test on a folder of the disk to test.
+fn bench_command(o: &std::collections::HashMap<String, String>, json_out: bool, lang: Lang) -> i32 {
+    use crate::bench::{self, Pattern, Phase};
+    let dir = o.get("path").map(std::path::PathBuf::from).unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
+    if !dir.is_dir() {
+        eprintln!("{}: {}", t(lang, "bench_no_folder"), dir.display());
+        return 2;
+    }
+    let size = match o.get("size") {
+        Some(v) => match parse_size(v) {
+            Some(b) if b >= 16 << 20 => b,
+            _ => {
+                eprintln!("{}", t(lang, "bench_bad_size"));
+                return 2;
+            }
+        },
+        None => 1 << 30,
+    };
+    let num = |k: &str, default: f64| o.get(k).and_then(|v| v.parse::<f64>().ok()).unwrap_or(default);
+    let pattern = match o.get("data").map(String::as_str) {
+        None | Some("random") => Pattern::Random,
+        Some("zero" | "zeros" | "0") => Pattern::Zeros,
+        Some("ones" | "ff" | "1") => Pattern::Ones,
+        Some(_) => {
+            eprintln!("--data random|zero|ones");
+            return 2;
+        }
+    };
+    let specs = match o.get("profile").map(String::as_str) {
+        None | Some("nvme") => bench::PROFILE_NVME.to_vec(),
+        Some("default") => bench::PROFILE_DEFAULT.to_vec(),
+        Some(_) => {
+            eprintln!("--profile nvme|default");
+            return 2;
+        }
+    };
+    let cfg = bench::Config {
+        dir,
+        size,
+        runs: num("runs", 1.0).clamp(1.0, 9.0) as u32,
+        secs: num("time", 5.0).clamp(0.5, 60.0),
+        interval: num("interval", 1.0).clamp(0.0, 30.0),
+        pattern,
+        specs,
+    };
+    let (read, write) = (t(lang, "bench_read"), t(lang, "bench_write"));
+    let h = bench::start(cfg);
+    let mut last = String::new();
+    loop {
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        let s = h.state.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        let line = match &s.phase {
+            Phase::Preparing => t(lang, "bench_preparing").to_string(),
+            Phase::Testing { index, write: w, .. } => {
+                format!("{} {}", s.results[*index].spec.name, if *w { write } else { read })
+            }
+            _ => String::new(),
+        };
+        if !line.is_empty() && line != last {
+            eprintln!("{line}…");
+            last = line;
+        }
+        match s.phase {
+            Phase::Done => {
+                if !s.direct {
+                    eprintln!("{}", t(lang, "bench_note_cached"));
+                }
+                if json_out {
+                    let tests: Vec<Value> = s
+                        .results
+                        .iter()
+                        .map(|r| {
+                            let p = |x: &Option<bench::PassResult>| {
+                                x.map(|p| json!({"mb_per_s": p.mbps, "iops": p.iops, "latency_us": p.latency_us})).unwrap_or(Value::Null)
+                            };
+                            json!({"test": r.spec.name, "block_bytes": r.spec.block, "sequential": r.spec.sequential,
+                                   "queue": r.spec.queue, "threads": r.spec.threads, "read": p(&r.read), "write": p(&r.write)})
+                        })
+                        .collect();
+                    println!("{}", serde_json::to_string_pretty(&json!({"direct_io": s.direct, "tests": tests})).unwrap_or_default());
+                } else {
+                    print!("{}", bench::format_table(&s.results, read, write));
+                }
+                return 0;
+            }
+            Phase::Cancelled => return 1,
+            Phase::Failed(e) => {
+                eprintln!("{}: {e}", t(lang, "bench_failed"));
+                return 1;
+            }
+            _ => {}
+        }
+    }
+}
+
 fn help_text(lang: Lang) -> String {
     format!(
-        "{name} {ver}\n\n{usage}:\n  diskinfo                         {gui}\n  diskinfo list                    {list}\n  diskinfo health                  {health}\n  diskinfo show [DISK]             {show}\n  diskinfo partitions [DISK]       {parts}\n  diskinfo json [DISK]             {json}\n  diskinfo selftest short|long DISK  {test}\n  diskinfo help | version\n\n{opts}:\n  -a, --admin       {admin}\n  -j, --json        {jsonopt}\n  --lang es|en|pt|fr|de|it\n\nDISK: 1, 2… | sda | /dev/nvme0n1 | PhysicalDrive0 | {serial}\n{exit}: 0 = {good}, 1 = {caution}, 2 = {bad}, 3 = {unknown}\n",
+        "{name} {ver}\n\n{usage}:\n  diskinfo                         {gui}\n  diskinfo list                    {list}\n  diskinfo health                  {health}\n  diskinfo show [DISK]             {show}\n  diskinfo partitions [DISK]       {parts}\n  diskinfo json [DISK]             {json}\n  diskinfo selftest short|long DISK  {test}\n  diskinfo bench [--path DIR] [--size 1G] [--runs N] [--time S] [--data random|zero|ones] [--profile nvme|default]\n                                   {bench}\n  diskinfo help | version\n\n{opts}:\n  -a, --admin       {admin}\n  -j, --json        {jsonopt}\n  --lang es|en|pt|fr|de|it\n\nDISK: 1, 2… | sda | /dev/nvme0n1 | PhysicalDrive0 | {serial}\n{exit}: 0 = {good}, 1 = {caution}, 2 = {bad}, 3 = {unknown}\n",
         name = crate::APP_NAME,
         ver = env!("CARGO_PKG_VERSION"),
         usage = t(lang, "cli_usage"),
@@ -408,6 +524,7 @@ fn help_text(lang: Lang) -> String {
         parts = t(lang, "cli_parts"),
         json = t(lang, "cli_json"),
         test = t(lang, "cli_test"),
+        bench = t(lang, "cli_bench"),
         opts = t(lang, "cli_options"),
         admin = t(lang, "cli_admin"),
         jsonopt = t(lang, "cli_json_opt"),

@@ -12,6 +12,11 @@ the Windows disk health tool created by **hiyohiyo** (Noriyuki Miyazaki) of
 - CrystalDiskInfo is released under the MIT License, Copyright (c) 2008-2023 hiyohiyo. Its notice is
   kept in [LICENSE-CrystalDiskInfo.txt](LICENSE-CrystalDiskInfo.txt).
 
+The **disk speed test** follows the tests and options of **[CrystalDiskMark](https://github.com/hiyohiyo/CrystalDiskMark)**,
+also by hiyohiyo and released under the MIT License (the four tests `SEQ1M Q8T1`, `SEQ128K Q32T1`,
+`RND4K Q32T16`, `RND4K Q1T1`, random or fill data, runs and intervals). Only its public behaviour was
+used as a model; no code was copied, and it is not affiliated with that project either.
+
 DiskInfo++ is an independent rewrite in Rust for Linux, Windows and macOS. It contains no code copied
 from CrystalDiskInfo and is not affiliated with or endorsed by its author. If you find CrystalDiskInfo
 useful on Windows, please support the original project.

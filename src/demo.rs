@@ -145,3 +145,24 @@ pub fn demo_alerts(disks: &[Disk]) -> crate::alerts::Log {
     log.push(crate::alerts::Event { t: now - 2 * 86_400, kind: "hot".into(), disk: label(0), value: "51".into() });
     log
 }
+
+/// Finished sample results for the speed test window, so it can be checked without running a test.
+pub fn demo_bench() -> crate::bench::State {
+    use crate::bench::{PassResult, Phase, State, PROFILE_NVME};
+    let mut s = State::new(&PROFILE_NVME);
+    let pass = |mbps: f64, block: f64, workers: f64| {
+        let iops = mbps * 1e6 / block;
+        Some(PassResult { mbps, iops, latency_us: workers / iops * 1e6 })
+    };
+    s.results[0].read = pass(3196.7, 1048576.0, 8.0);
+    s.results[0].write = pass(2109.65, 1048576.0, 8.0);
+    s.results[1].read = pass(3184.78, 131072.0, 32.0);
+    s.results[1].write = pass(1365.86, 131072.0, 32.0);
+    s.results[2].read = pass(1329.15, 4096.0, 512.0);
+    s.results[2].write = pass(194.39, 4096.0, 512.0);
+    s.results[3].read = pass(61.08, 4096.0, 1.0);
+    s.results[3].write = pass(124.30, 4096.0, 1.0);
+    s.phase = Phase::Done;
+    s.fraction = 1.0;
+    s
+}
