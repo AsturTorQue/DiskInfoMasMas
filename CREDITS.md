@@ -42,3 +42,7 @@ creado por **hiyohiyo** (Noriyuki Miyazaki, Crystal Dew World), publicado con li
 (© 2008-2023 hiyohiyo). Sus reglas de salud y su diseño son el modelo de esta app. DiskInfo++ es una
 reescritura independiente en Rust, sin código copiado del original y sin relación oficial con su autor.
 Incluye `smartctl` de smartmontools (GPL-2.0 o posterior), sin modificar.
+
+## Fake drive test
+
+The idea of writing unique blocks over the free space and reading them back to expose fake capacity is the same one used by tools such as H2testw and F3. DiskInfo++ has its own independent implementation.
