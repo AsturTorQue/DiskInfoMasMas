@@ -127,19 +127,19 @@ impl App {
         let free_now: Option<u64> = f.dirs.get(f.dir_idx).and_then(|d| crate::platform::free_bytes(&d.0));
 
         egui::Window::new(t(lang, "fake_title").trim_end_matches('…'))
+            .id(egui::Id::new("fake_window_v3"))
             .open(&mut open)
             .resizable(true)
             .collapsible(false)
-            .default_width((ctx.screen_rect().width() * 0.9).min(1100.0))
+            .default_size([(ctx.screen_rect().width() * 0.9).min(1100.0), ctx.screen_rect().height() * 0.9])
             .min_width(ctx.screen_rect().width().min(760.0) * 0.8)
             .max_width(ctx.screen_rect().width() * 0.98)
             .vscroll(true)
-            .default_height(ctx.screen_rect().height() * 0.9)
             .show(ctx, |ui| {
                 ui.label(t(lang, "fake_intro"));
                 ui.add_space(6.0);
                 // Two columns when the window is wide, one under the other when it is not.
-                let wide = ui.available_width() >= 600.0;
+                let wide = ui.available_width() >= 900.0;
                 ui.columns(if wide { 2 } else { 1 }, |cols| {
                 cols[0].add_enabled_ui(!running, |ui| {
                     let mode = if f.quick { crate::drive_picker::PickMode::FakeQuick } else { crate::drive_picker::PickMode::FakeFull };

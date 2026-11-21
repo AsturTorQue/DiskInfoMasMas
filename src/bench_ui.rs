@@ -287,17 +287,17 @@ impl App {
         let (read_w, write_w) = (t(lang, "bench_read"), t(lang, "bench_write"));
 
         egui::Window::new(t(lang, "bench_title").trim_end_matches('…'))
+            .id(egui::Id::new("bench_window_v3"))
             .open(&mut open)
             .resizable(true)
             .collapsible(false)
-            .default_width((ctx.screen_rect().width() * 0.9).min(1100.0))
+            .default_size([(ctx.screen_rect().width() * 0.9).min(1100.0), ctx.screen_rect().height() * 0.9])
             .min_width(ctx.screen_rect().width().min(760.0) * 0.8)
             .max_width(ctx.screen_rect().width() * 0.98)
             .vscroll(true)
-            .default_height(ctx.screen_rect().height() * 0.9)
             .show(ctx, |ui| {
                 // Two columns when the window is wide, one under the other when it is not.
-                let wide = ui.available_width() >= 940.0;
+                let wide = ui.available_width() >= 900.0;
                 ui.columns(if wide { 2 } else { 1 }, |cols| {
                 cols[0].add_enabled_ui(!running, |ui| {
                     if self.drive_picker(ui, &b.dirs, &mut b.dir_idx, crate::drive_picker::PickMode::Speed, 80.0) {
