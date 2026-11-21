@@ -172,6 +172,8 @@ pub fn helper_main(args: &[String]) -> i32 {
     }
     let cancel_file = args.iter().position(|a| a == "--cancel-file").and_then(|i| args.get(i + 1)).cloned();
     let state: Shared = Arc::new(Mutex::new(State::new(&Config { dir: PathBuf::new(), bytes: 0, quick: true })));
+    // Already "writing": a first line saying "idle" would look like a finished test to the window.
+    update(&state, |s| s.phase = Phase::Writing);
     let cancel = Arc::new(AtomicBool::new(false));
     let done = Arc::new(AtomicBool::new(false));
     // Watches for the cancel file and reports the state.
@@ -348,6 +350,13 @@ mod tests {
         assert_eq!(s.bad_count, 0);
         assert_eq!(s.verdict, Some(fakecheck::Verdict::Genuine));
         assert!(after == data, "the original data must be back");
+    }
+
+    #[test]
+    fn a_fresh_state_does_not_look_finished() {
+        // The window drops its handle as soon as a state says "not running".
+        let s = State::new(&Config { dir: PathBuf::new(), bytes: 0, quick: true });
+        assert!(s.running());
     }
 
     #[test]

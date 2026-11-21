@@ -128,7 +128,7 @@ impl State {
     }
 
     pub fn running(&self) -> bool {
-        matches!(self.phase, Phase::Writing | Phase::Verifying)
+        matches!(self.phase, Phase::Idle | Phase::Writing | Phase::Verifying)
     }
 }
 
