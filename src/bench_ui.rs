@@ -297,7 +297,7 @@ impl App {
             .default_height(ctx.screen_rect().height() * 0.9)
             .show(ctx, |ui| {
                 // Two columns when the window is wide, one under the other when it is not.
-                let wide = ui.available_width() >= 820.0;
+                let wide = ui.available_width() >= 940.0;
                 ui.columns(if wide { 2 } else { 1 }, |cols| {
                 cols[0].add_enabled_ui(!running, |ui| {
                     if self.drive_picker(ui, &b.dirs, &mut b.dir_idx, crate::drive_picker::PickMode::Speed, 80.0) {
@@ -360,10 +360,10 @@ impl App {
                 ui.add_space(6.0);
                 ui.horizontal(|ui| {
                     if running {
-                        if ui.button(t(lang, "bench_stop")).clicked() {
+                        if ui.add(egui::Button::new(RichText::new(t(lang, "bench_stop")).size(18.0).strong()).min_size(egui::Vec2::new(200.0, 44.0))).clicked() {
                             stop = true;
                         }
-                    } else if ui.add_enabled(b.dirs.get(b.dir_idx).is_some_and(|d| !dir_label_locked(&d.1)), egui::Button::new(RichText::new(t(lang, "bench_start")).strong())).clicked() {
+                    } else if ui.add_enabled(b.dirs.get(b.dir_idx).is_some_and(|d| !dir_label_locked(&d.1)), egui::Button::new(RichText::new(t(lang, "bench_start")).size(18.0).strong()).min_size(egui::Vec2::new(200.0, 44.0))).clicked() {
                         start = true;
                     }
                     if let Some(s) = &state {

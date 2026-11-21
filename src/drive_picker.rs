@@ -183,19 +183,16 @@ impl App {
                         };
                         let free = p.free.map(|f| format!(" · {} {}", self.bytes_text(f), t(lang, "col_free").to_lowercase())).unwrap_or_default();
                         let name = if p.label.is_empty() { p.name.clone() } else { format!("{} ({})", p.name, p.label) };
-                        let text = format!("{name} · {} · {}{free}", if p.fs.is_empty() { "?" } else { &p.fs }, self.bytes_text(p.size));
-                        ui.horizontal(|ui| {
-                            let selected = entry.is_some() && entry == Some(*idx);
-                            let resp = ui.add_enabled(entry.is_some(), egui::SelectableLabel::new(selected, RichText::new(text).monospace().size(12.5)));
-                            if resp.clicked() {
-                                if let Some(i) = entry {
-                                    *idx = i;
-                                }
+                        // Two short lines per partition, so it also fits in a half-width column.
+                        let text = format!("{name}\n{} · {}{free}", if p.fs.is_empty() { "?" } else { &p.fs }, self.bytes_text(p.size));
+                        let selected = entry.is_some() && entry == Some(*idx);
+                        let resp = ui.add_enabled(entry.is_some(), egui::SelectableLabel::new(selected, RichText::new(text).monospace().size(12.0)));
+                        if resp.clicked() {
+                            if let Some(i) = entry {
+                                *idx = i;
                             }
-                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                ui.label(RichText::new(status).small().strong().color(color));
-                            });
-                        });
+                        }
+                        ui.label(RichText::new(format!("   {status}")).small().strong().color(color));
                     }
                 });
                 ui.add_space(4.0);

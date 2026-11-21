@@ -139,7 +139,7 @@ impl App {
                 ui.label(t(lang, "fake_intro"));
                 ui.add_space(6.0);
                 // Two columns when the window is wide, one under the other when it is not.
-                let wide = ui.available_width() >= 820.0;
+                let wide = ui.available_width() >= 600.0;
                 ui.columns(if wide { 2 } else { 1 }, |cols| {
                 cols[0].add_enabled_ui(!running, |ui| {
                     let mode = if f.quick { crate::drive_picker::PickMode::FakeQuick } else { crate::drive_picker::PickMode::FakeFull };
@@ -158,7 +158,7 @@ impl App {
                 ui.add_enabled_ui(!running, |ui| {
                     egui::Grid::new("fake_cfg").num_columns(2).spacing([12.0, 6.0]).show(ui, |ui| {
                         ui.label(t(lang, "fake_mode"));
-                        ui.horizontal(|ui| {
+                        ui.vertical(|ui| {
                             ui.selectable_value(&mut f.quick, true, t(lang, "fake_mode_quick"));
                             ui.selectable_value(&mut f.quick, false, t(lang, "fake_mode_full"));
                         });
@@ -193,10 +193,10 @@ impl App {
                 ui.add_space(6.0);
                 ui.horizontal(|ui| {
                     if running {
-                        if ui.button(t(lang, "bench_stop")).clicked() {
+                        if ui.add(egui::Button::new(RichText::new(t(lang, "bench_stop")).size(18.0).strong()).min_size(egui::Vec2::new(200.0, 44.0))).clicked() {
                             stop = true;
                         }
-                    } else if ui.add_enabled(raw.is_some() || (free_now.is_some() && f.dirs.get(f.dir_idx).is_some_and(|d| !crate::bench_ui::dir_label_locked(&d.1))), egui::Button::new(RichText::new(t(lang, "bench_start")).strong())).clicked() {
+                    } else if ui.add_enabled(raw.is_some() || (free_now.is_some() && f.dirs.get(f.dir_idx).is_some_and(|d| !crate::bench_ui::dir_label_locked(&d.1))), egui::Button::new(RichText::new(t(lang, "bench_start")).size(18.0).strong()).min_size(egui::Vec2::new(200.0, 44.0))).clicked() {
                         start = true;
                     }
                 });
