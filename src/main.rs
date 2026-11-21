@@ -134,6 +134,9 @@ struct App {
     storage_rx: Option<Receiver<Vec<Disk>>>,
     storage_at: Option<Instant>,
     storage_force: bool,
+    /// Folders the person picked by hand for the tests, and the folder dialog that is open.
+    custom_dirs: Vec<PathBuf>,
+    folder_rx: Option<Receiver<Result<Option<PathBuf>, String>>>,
     scan_admin: bool,
     needs_admin: bool,
     direct_ok: bool,
@@ -218,6 +221,8 @@ impl App {
             storage_rx: None,
             storage_at: None,
             storage_force: false,
+            custom_dirs: Vec::new(),
+            folder_rx: None,
             scan_admin: false,
             needs_admin: false,
             direct_ok: false,
@@ -298,6 +303,46 @@ impl App {
     fn tick_storage(&mut self, ctx: &egui::Context) {
         if self.quiet || !(self.bench.open || self.fake.open) {
             return;
+        }
+        // "Choose folder…": the system's folder dialog runs in its own thread.
+        let req = egui::Id::new("pick_folder_req");
+        if ctx.data(|d| d.get_temp::<bool>(req)).unwrap_or(false) {
+            ctx.data_mut(|d| d.remove::<bool>(req));
+            if self.folder_rx.is_none() {
+                let (tx, rx) = channel();
+                let title = self.tr("pick_folder_title").to_string();
+                std::thread::spawn(move || {
+                    let _ = tx.send(platform::pick_folder(&title));
+                });
+                self.folder_rx = Some(rx);
+            }
+        }
+        if let Some(rx) = &self.folder_rx {
+            match rx.try_recv() {
+                Ok(r) => {
+                    self.folder_rx = None;
+                    match r {
+                        Ok(Some(p)) if p.is_dir() => {
+                            if !self.custom_dirs.contains(&p) {
+                                self.custom_dirs.push(p.clone());
+                            }
+                            self.rebuild_test_dirs();
+                            if let Some(i) = self.bench.dirs.iter().position(|d| d.0 == p) {
+                                self.bench.dir_idx = i;
+                            }
+                            if let Some(i) = self.fake.dirs.iter().position(|d| d.0 == p) {
+                                self.fake.dir_idx = i;
+                            }
+                        }
+                        Err(_) => {
+                            let msg = self.tr("pick_folder_none").to_string();
+                            ctx.data_mut(|d| d.insert_temp(egui::Id::new("mount_msg"), msg));
+                        }
+                        _ => {}
+                    }
+                }
+                Err(_) => ctx.request_repaint_after(Duration::from_millis(300)),
+            }
         }
         if let Some(rx) = &self.storage_rx {
             if let Ok(list) = rx.try_recv() {

@@ -182,6 +182,8 @@ pub fn demo_fake() -> crate::fakecheck::State {
         BadBlock { index: 1, kind: BlockKind::Overwritten(8193) },
         BadBlock { index: 2, kind: BlockKind::Overwritten(8194) },
     ];
+    s.hist_write = (0..120).map(|i| 22.0 + 6.0 * ((i as f32) / 9.0).sin() - (i as f32 / 60.0) * 4.0).collect();
+    s.hist_read = (0..60).map(|i| 31.0 + 4.0 * ((i as f32) / 5.0).sin()).collect();
     s.write_avg = 18.4;
     s.write_min = 3.1;
     s.read_avg = 31.7;

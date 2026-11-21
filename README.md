@@ -76,6 +76,7 @@ When the system already has `smartctl`, that one is used.
   card or SSD with unique blocks, reads them back and tells whether it is genuine, faulty or a fake
   that holds less than it claims (with the estimated real capacity). Only conclusive when it checks
   (nearly) all the free space. Also from the terminal: `diskinfo fakecheck --path DIR --quick` or `--percent 100`.
+- The fake drive test shows the speed live (with a graph) and lets you pick any folder to test in, like H2testw.
 - **Start with the system** (File menu): starts minimised when you log in, so the history keeps
   growing and alerts keep coming without opening the window.
 - **Save the report** as a text file or the window as a picture (Edit menu; saved in Documents).

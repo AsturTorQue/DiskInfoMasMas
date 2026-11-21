@@ -202,6 +202,10 @@ impl App {
         if let Some(docs) = crate::platform::documents_dir() {
             add(docs.clone(), docs.display().to_string(), &mut out);
         }
+        // Folders the person chose by hand.
+        for c in &self.custom_dirs {
+            add(c.clone(), c.display().to_string(), &mut out);
+        }
         // Partitions that are not mounted (a USB stick just plugged in): offered with a Mount button.
         #[cfg(target_os = "linux")]
         for d in self.pick_disks() {

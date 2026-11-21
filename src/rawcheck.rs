@@ -79,6 +79,7 @@ fn core(dev: &str, state: &Shared, cancel: &AtomicBool) -> io::Result<bool> {
     let mut written = 0usize;
     let result = (|| -> io::Result<bool> {
         let t0 = std::time::Instant::now();
+        let mut meter = fakecheck::Meter::new();
         for (k, &i) in plan.iter().enumerate() {
             if cancel.load(Ordering::Relaxed) {
                 return Ok(false);
@@ -86,10 +87,15 @@ fn core(dev: &str, state: &Shared, cancel: &AtomicBool) -> io::Result<bool> {
             fakecheck::fill_block(&mut buf.as_mut_slice()[..CHUNK], seed, i);
             written = k + 1; // counted before the write: a half-done write is put back too
             crate::bench::write_full(&file, &buf.as_slice()[..CHUNK], at(i))?;
+            meter.add(CHUNK as u64);
             if k % 4 == 0 || k + 1 == n {
+                let (now, hist, step) = meter.live_view();
                 update(state, |s| {
                     s.written = k as u64 + 1;
                     s.fraction = 0.15 + 0.35 * (k + 1) as f32 / n as f32;
+                    s.speed_now = now;
+                    s.hist_write = hist;
+                    s.hist_step = step;
                 });
             }
         }
@@ -100,19 +106,24 @@ fn core(dev: &str, state: &Shared, cancel: &AtomicBool) -> io::Result<bool> {
             s.phase = Phase::Verifying;
         });
         let t1 = std::time::Instant::now();
+        let mut meter = fakecheck::Meter::new();
         let mut expected = bench_buf();
         for (k, &i) in plan.iter().enumerate() {
             if cancel.load(Ordering::Relaxed) {
                 return Ok(false);
             }
             let read = crate::bench::read_full(&file, &mut buf.as_mut_slice()[..CHUNK], at(i));
+            meter.add(CHUNK as u64);
             fakecheck::fill_block(&mut expected.as_mut_slice()[..CHUNK], seed, i);
             let kind = match read {
                 Ok(()) if buf.as_slice()[..CHUNK] == expected.as_slice()[..CHUNK] => None,
                 Ok(()) => Some(fakecheck::classify(&buf.as_slice()[..CHUNK], seed, i)),
                 Err(_) => Some(BlockKind::Empty),
             };
+            let (now, hist, _) = meter.live_view();
             update(state, |s| {
+                s.speed_now = now;
+                s.hist_read = hist;
                 s.verified = k as u64 + 1;
                 s.fraction = 0.5 + 0.45 * (k + 1) as f32 / n as f32;
                 if let Some(kind) = kind {

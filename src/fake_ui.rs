@@ -66,6 +66,10 @@ impl App {
         if !cfg!(target_os = "linux") {
             return None;
         }
+        // A folder chosen by hand is tested with files in it, like H2testw does.
+        if self.custom_dirs.iter().any(|c| c == dir) {
+            return None;
+        }
         let mut best: Option<(usize, &crate::disks::Disk)> = None;
         for d in self.pick_disks() {
             if Path::new(&format!("/dev/{}", d.dev)) == dir && best.is_none() {
@@ -219,6 +223,7 @@ impl App {
                     };
                     if running {
                         ui.add(egui::ProgressBar::new(s.fraction).show_percentage().text(status));
+                        ui.add_space(4.0);
                     } else if matches!(s.phase, Phase::Failed(_)) {
                         egui::Frame::new().fill(pal.bad).corner_radius(6).inner_margin(10).show(ui, |ui| {
                             ui.set_width(ui.available_width());
@@ -267,6 +272,8 @@ impl App {
                         }
                     }
 
+                    // Speed now and its graph.
+                    crate::drive_picker::speed_graph(ui, &pal, s, t(lang, "fake_speed_now"), (t(lang, "bench_write"), t(lang, "bench_read")), |x| self.decimal(x));
                     // The block map of the test.
                     if s.written > 0 || running {
                         ui.add_space(6.0);

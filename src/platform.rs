@@ -149,3 +149,48 @@ pub fn free_bytes(dir: &std::path::Path) -> Option<u64> {
         None
     }
 }
+
+/// Asks the person for a folder with the system's own dialog (zenity or kdialog on Linux, the
+/// folder browser on Windows, Finder on macOS). Blocks until it is closed: run it in a thread.
+/// `Ok(None)` means it was cancelled; `Err` that no dialog program was found.
+pub fn pick_folder(title: &str) -> Result<Option<PathBuf>, String> {
+    use std::process::Stdio;
+    let run = |mut c: Command| -> Result<Option<PathBuf>, String> {
+        let out = c.stdin(Stdio::null()).stderr(Stdio::null()).output().map_err(|e| e.to_string())?;
+        let text = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        Ok((out.status.success() && !text.is_empty()).then(|| PathBuf::from(text)))
+    };
+    #[cfg(target_os = "linux")]
+    {
+        let start = home().map(|h| format!("{}/", h.display())).unwrap_or_default();
+        let mut z = command("zenity");
+        z.args(["--file-selection", "--directory", "--title", title, "--filename", &start]);
+        match run(z) {
+            Err(_) => {}
+            ok => return ok,
+        }
+        let mut k = command("kdialog");
+        k.args(["--title", title, "--getexistingdirectory", &start]);
+        match run(k) {
+            Err(_) => {}
+            ok => return ok,
+        }
+        Err("zenity".into())
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let mut c = command("osascript");
+        c.args(["-e", &format!("POSIX path of (choose folder with prompt \"{}\")", title.replace('"', ""))]);
+        run(c)
+    }
+    #[cfg(windows)]
+    {
+        let script = format!(
+            "Add-Type -AssemblyName System.Windows.Forms; $f = New-Object System.Windows.Forms.FolderBrowserDialog; $f.Description = '{}'; if ($f.ShowDialog() -eq 'OK') {{ $f.SelectedPath }}",
+            title.replace('\'', "")
+        );
+        let mut c = command("powershell");
+        c.args(["-NoProfile", "-STA", "-Command", &script]);
+        run(c)
+    }
+}

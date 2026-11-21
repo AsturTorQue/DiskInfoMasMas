@@ -104,6 +104,12 @@ pub struct State {
     pub verdict: Option<Verdict>,
     /// Quick mode: `total`, `written` and `verified` count sample blocks, not the whole space.
     pub quick: bool,
+    /// Speed over the last half second (MB/s) while a phase runs, and the speeds seen so far in
+    /// each phase (one value per `hist_step` seconds) for the live graph.
+    pub speed_now: f64,
+    pub hist_write: Vec<f32>,
+    pub hist_read: Vec<f32>,
+    pub hist_step: f64,
 }
 
 impl State {
@@ -124,6 +130,10 @@ impl State {
             direct: true,
             verdict: None,
             quick: cfg.quick,
+            speed_now: 0.0,
+            hist_write: Vec::new(),
+            hist_read: Vec::new(),
+            hist_step: 0.5,
         }
     }
 
@@ -247,21 +257,67 @@ impl Drop for Files {
     }
 }
 
-/// Measures speed over windows of about a second, keeping the slowest.
-struct Meter {
+/// Measures speed over windows of about a second (keeping the slowest), and live over half a
+/// second with a history for the graph.
+pub struct Meter {
     start: Instant,
     window: Instant,
     window_bytes: u64,
     total_bytes: u64,
     min: Option<f64>,
+    live_t: Instant,
+    live_bytes: u64,
+    pub live: f64,
+    hist: Vec<f32>,
+    step: f64,
+    acc_t: f64,
+    acc_bytes: u64,
 }
 
 impl Meter {
-    fn new() -> Meter {
-        Meter { start: Instant::now(), window: Instant::now(), window_bytes: 0, total_bytes: 0, min: None }
+    pub fn new() -> Meter {
+        let now = Instant::now();
+        Meter {
+            start: now,
+            window: now,
+            window_bytes: 0,
+            total_bytes: 0,
+            min: None,
+            live_t: now,
+            live_bytes: 0,
+            live: 0.0,
+            hist: Vec::new(),
+            step: 0.5,
+            acc_t: 0.0,
+            acc_bytes: 0,
+        }
     }
 
-    fn add(&mut self, bytes: u64) {
+    /// (speed now, history, seconds per history point).
+    pub fn live_view(&self) -> (f64, Vec<f32>, f64) {
+        (self.live, self.hist.clone(), self.step)
+    }
+
+    pub fn add(&mut self, bytes: u64) {
+        self.live_bytes += bytes;
+        let dt = self.live_t.elapsed().as_secs_f64();
+        if dt >= 0.5 {
+            self.live = self.live_bytes as f64 / dt / 1e6;
+            self.acc_t += dt;
+            self.acc_bytes += self.live_bytes;
+            self.live_t = Instant::now();
+            self.live_bytes = 0;
+            if self.acc_t >= self.step {
+                self.hist.push((self.acc_bytes as f64 / self.acc_t / 1e6) as f32);
+                self.acc_t = 0.0;
+                self.acc_bytes = 0;
+                if self.hist.len() > 600 {
+                    // Too many points: join them two by two and make each one twice as long.
+                    self.hist = self.hist.chunks(2).map(|c| c.iter().sum::<f32>() / c.len() as f32).collect();
+                    self.step *= 2.0;
+                }
+            }
+        }
         self.window_bytes += bytes;
         self.total_bytes += bytes;
         let dt = self.window.elapsed().as_secs_f64();
@@ -274,7 +330,7 @@ impl Meter {
     }
 
     /// (average, slowest) in MB/s.
-    fn result(&self) -> (f64, f64) {
+    pub fn result(&self) -> (f64, f64) {
         let avg = self.total_bytes as f64 / self.start.elapsed().as_secs_f64().max(1e-6) / 1e6;
         (avg, self.min.unwrap_or(avg))
     }
@@ -300,6 +356,7 @@ pub fn write_phase(cfg: &Config, plan: &[u64], state: &Shared, cancel: &AtomicBo
     let mut current: Option<(u64, std::fs::File)> = None;
     let mut written = 0u64;
     let mut ran_full = false;
+    let mut last_ui = Instant::now();
     for (k, &i) in plan.iter().enumerate() {
         if cancel.load(Ordering::Relaxed) {
             return Ok(None);
@@ -338,11 +395,16 @@ pub fn write_phase(cfg: &Config, plan: &[u64], state: &Shared, cancel: &AtomicBo
         }
         written = k as u64 + 1;
         meter.add(BLOCK as u64);
-        if written % 8 == 0 || written == total {
+        if last_ui.elapsed().as_millis() >= 250 || written == total {
+            last_ui = Instant::now();
             let f = 0.5 * written as f32 / total.max(1) as f32;
+            let (now, hist, step) = meter.live_view();
             update(state, |s| {
                 s.written = written;
                 s.fraction = f;
+                s.speed_now = now;
+                s.hist_write = hist;
+                s.hist_step = step;
             });
         }
     }
@@ -350,7 +412,10 @@ pub fn write_phase(cfg: &Config, plan: &[u64], state: &Shared, cancel: &AtomicBo
         done.sync_data()?;
     }
     let (avg, min) = meter.result();
+    let (_, hist, step) = meter.live_view();
     update(state, |s| {
+        s.hist_write = hist;
+        s.hist_step = step;
         s.written = written;
         s.write_avg = avg;
         s.write_min = min;
@@ -398,9 +463,13 @@ pub fn verify_phase(state: &Shared, plan: &[u64], cancel: &AtomicBool, files: &F
         meter.add(BLOCK as u64);
         let verified = k as u64 + 1;
         let f = 0.5 + 0.5 * verified as f32 / written.max(1) as f32;
+        let (now, hist, step) = meter.live_view();
         update(state, |s| {
             s.verified = verified;
             s.fraction = f;
+            s.speed_now = now;
+            s.hist_read = hist;
+            s.hist_step = step.max(s.hist_step);
             if let Some(kind) = kind {
                 s.bad_count += 1;
                 if s.bad.len() < MAX_LISTED {
@@ -413,6 +482,7 @@ pub fn verify_phase(state: &Shared, plan: &[u64], cancel: &AtomicBool, files: &F
     update(state, |s| {
         s.read_avg = avg;
         s.read_min = min;
+        s.speed_now = 0.0;
     });
     Ok(Some(()))
 }

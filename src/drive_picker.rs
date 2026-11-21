@@ -100,6 +100,9 @@ impl App {
             if ui.button("⟳").on_hover_text(t(lang, "bench_refresh")).clicked() {
                 refresh = true;
             }
+            if ui.button(t(lang, "pick_folder_btn")).clicked() {
+                ui.ctx().data_mut(|d| d.insert_temp(egui::Id::new("pick_folder_req"), true));
+            }
             if mode != PickMode::Speed && ui.checkbox(&mut all, t(lang, "pick_show_all")).changed() {
                 ui.ctx().data_mut(|d| d.insert_temp(all_id, all));
             }
@@ -242,7 +245,11 @@ impl App {
                 ui.add_space(4.0);
             }
             // Folders that belong to no listed disk (the documents folder, other mounts).
-            let others: Vec<usize> = if all { (0..dirs.len()).filter(|i| !matched[*i] && !dirs[*i].0.starts_with("/dev/")).collect() } else { Vec::new() };
+            // Folders chosen by hand are always listed; the rest only when everything is shown.
+            let others: Vec<usize> = (0..dirs.len())
+                .filter(|i| !matched[*i] && !dirs[*i].0.starts_with("/dev/") && (all || self.custom_dirs.contains(&dirs[*i].0)))
+                .collect();
+            visible.extend(others.iter().cloned());
             if !shown_any {
                 ui.label(RichText::new(t(lang, "pick_empty")).color(pal.muted));
             }
@@ -350,4 +357,39 @@ pub(crate) fn progress_blocks(ui: &mut egui::Ui, pal: &crate::theme::Palette, s:
         let r = egui::Rect::from_min_size(rect.min + Vec2::new(col as f32 * (cell + 2.0), row as f32 * (cell + 2.0)), Vec2::splat(cell));
         ui.painter().rect_filled(r, 2.0, color);
     }
+}
+
+/// The live speed: the number now and a graph of the speeds so far (writing in blue, reading in
+/// green), in MB/s.
+pub(crate) fn speed_graph(ui: &mut egui::Ui, pal: &crate::theme::Palette, s: &crate::fakecheck::State, label: &str, legend: (&str, &str), decimal: impl Fn(String) -> String) {
+    let (nw, nr) = (s.hist_write.len(), s.hist_read.len());
+    if nw + nr < 2 && s.speed_now <= 0.0 {
+        return;
+    }
+    if s.running() {
+        ui.label(RichText::new(format!("{label}: {} MB/s", decimal(format!("{:.1}", s.speed_now)))).strong().size(16.0));
+    }
+    if nw + nr < 2 {
+        return;
+    }
+    let max = s.hist_write.iter().chain(s.hist_read.iter()).cloned().fold(1.0f32, f32::max) * 1.1;
+    let width = ui.available_width();
+    let (rect, _) = ui.allocate_exact_size(Vec2::new(width, 80.0), Sense::hover());
+    ui.painter().rect_filled(rect, 3.0, pal.stripe);
+    let n = (nw + nr).max(2) as f32;
+    let point = |i: usize, v: f32| egui::pos2(rect.left() + width * i as f32 / (n - 1.0), rect.bottom() - 2.0 - (rect.height() - 4.0) * v / max);
+    let line = |vals: &[f32], offset: usize, color: Color32| {
+        let pts: Vec<egui::Pos2> = vals.iter().enumerate().map(|(i, v)| point(offset + i, *v)).collect();
+        if pts.len() >= 2 {
+            ui.painter().add(egui::Shape::line(pts, Stroke::new(1.8_f32, color)));
+        }
+    };
+    line(&s.hist_write, 0, pal.accent);
+    let orange = Color32::from_rgb(235, 140, 30);
+    line(&s.hist_read, nw.saturating_sub(1), orange);
+    ui.horizontal(|ui| {
+        ui.label(RichText::new(format!("- {}", legend.0)).small().color(pal.accent));
+        ui.label(RichText::new(format!("- {}", legend.1)).small().color(orange));
+    });
+    ui.painter().text(rect.left_top() + Vec2::new(4.0, 2.0), egui::Align2::LEFT_TOP, format!("{} MB/s", decimal(format!("{:.0}", max))), egui::FontId::proportional(10.0), pal.muted);
 }

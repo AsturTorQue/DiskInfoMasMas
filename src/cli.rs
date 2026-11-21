@@ -550,7 +550,7 @@ fn fakecheck_command(o: &std::collections::HashMap<String, String>, json_out: bo
         let pct = (s.fraction * 100.0) as u64;
         if matches!(s.phase, Phase::Writing | Phase::Verifying) && pct != last {
             let what = if matches!(s.phase, Phase::Writing) { t(lang, "fake_writing") } else { t(lang, "fake_verifying") };
-            eprintln!("{what}… {pct} %");
+            eprintln!("{what}… {pct} %  ({:.1} MB/s)", s.speed_now);
             last = pct;
         }
         match &s.phase {
