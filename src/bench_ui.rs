@@ -80,12 +80,66 @@ pub(crate) fn mount_dir(m: &str) -> PathBuf {
     }
 }
 
+/// Every mounted file system of a real disk that the system lists (not only the disks read for
+/// S.M.A.R.T.): (folder, file system).
+fn system_mounts() -> Vec<(PathBuf, String)> {
+    let mut v = Vec::new();
+    #[cfg(target_os = "linux")]
+    if let Ok(text) = std::fs::read_to_string("/proc/mounts") {
+        const REAL: [&str; 14] = ["ext2", "ext3", "ext4", "btrfs", "xfs", "f2fs", "vfat", "exfat", "ntfs", "ntfs3", "fuseblk", "jfs", "reiserfs", "udf"];
+        for line in text.lines() {
+            let mut f = line.split_whitespace();
+            let (Some(dev), Some(mp), Some(fs)) = (f.next(), f.next(), f.next()) else { continue };
+            if !dev.starts_with('/') || !REAL.contains(&fs) || mp.starts_with("/snap") || mp.contains("/flatpak/") || mp.starts_with("/var/lib/") {
+                continue;
+            }
+            // Bind mounts of immutable systems (Bazzite, Silverblue...) are not drives to pick.
+            if ["/etc", "/sysroot", "/usr", "/var/opt", "/var/log", "/var/tmp", "/opt"].iter().any(|p| mp == *p || mp.starts_with(&format!("{p}/"))) || mp == "/var" {
+                continue;
+            }
+            // Spaces are written as \040 in this file.
+            v.push((PathBuf::from(mp.replace("\\040", " ")), fs.to_string()));
+        }
+    }
+    #[cfg(windows)]
+    for c in b'A'..=b'Z' {
+        let p = PathBuf::from(format!("{}:\\", c as char));
+        if p.is_dir() {
+            v.push((p, String::new()));
+        }
+    }
+    #[cfg(target_os = "macos")]
+    if let Ok(rd) = std::fs::read_dir("/Volumes") {
+        for e in rd.flatten() {
+            v.push((e.path(), String::new()));
+        }
+    }
+    v
+}
+
+/// True for a folder entry that the person cannot write to (see `bench_folders`).
+pub(crate) fn dir_label_locked(label: &str) -> bool {
+    label.ends_with(LOCKED)
+}
+
+const LOCKED: &str = " [x]";
+
+/// The label as shown: the marker of a folder without write access becomes words.
+pub(crate) fn dir_label(lang: crate::i18n::Lang, label: &str) -> String {
+    match label.strip_suffix(LOCKED) {
+        Some(l) => format!("{l} - {}", t(lang, "bench_locked")),
+        None => label.to_string(),
+    }
+}
+
 impl App {
     /// Folders of the disks on screen where a test file can be made, and the person's own folders.
     pub(crate) fn bench_folders(&self) -> Vec<(PathBuf, String)> {
         let mut out: Vec<(PathBuf, String)> = Vec::new();
         let add = |dir: PathBuf, label: String, out: &mut Vec<(PathBuf, String)>| {
-            if !out.iter().any(|(p, _)| *p == dir) && dir.is_dir() && writable(&dir) {
+            if !out.iter().any(|(p, _)| *p == dir) && dir.is_dir() {
+                // A mounted drive the person cannot write to is still listed, marked.
+                let label = if writable(&dir) { label } else { format!("{label}{LOCKED}") };
                 out.push((dir, label));
             }
         };
@@ -96,6 +150,11 @@ impl App {
                     add(mount_dir(m), format!("{m} — {}{free}", d.model), &mut out);
                 }
             }
+        }
+        for (mp, fs) in system_mounts() {
+            let free = crate::platform::free_bytes(&mp).map(|f| format!(" · {} {}", self.bytes_text(f), t(self.settings.language, "col_free").to_lowercase())).unwrap_or_default();
+            let fs = if fs.is_empty() { String::new() } else { format!(" ({fs})") };
+            add(mp.clone(), format!("{}{fs}{free}", mp.display()), &mut out);
         }
         if let Some(docs) = crate::platform::documents_dir() {
             add(docs.clone(), docs.display().to_string(), &mut out);
@@ -150,10 +209,10 @@ impl App {
                     egui::Grid::new("bench_cfg").num_columns(2).spacing([12.0, 6.0]).show(ui, |ui| {
                         ui.label(t(lang, "bench_folder"));
                         ui.horizontal(|ui| {
-                            let shown = b.dirs.get(b.dir_idx).map(|d| d.1.clone()).unwrap_or_else(|| t(lang, "bench_no_dirs").to_string());
+                            let shown = b.dirs.get(b.dir_idx).map(|d| dir_label(lang, &d.1)).unwrap_or_else(|| t(lang, "bench_no_dirs").to_string());
                             egui::ComboBox::from_id_salt("bench_dir").width(430.0).selected_text(shown).show_ui(ui, |ui| {
                                 for (i, (_, label)) in b.dirs.iter().enumerate() {
-                                    ui.selectable_value(&mut b.dir_idx, i, label);
+                                    ui.selectable_value(&mut b.dir_idx, i, dir_label(lang, label));
                                 }
                             });
                             if ui.button("⟳").on_hover_text(t(lang, "bench_refresh")).clicked() {
@@ -211,7 +270,7 @@ impl App {
                         if ui.button(t(lang, "bench_stop")).clicked() {
                             stop = true;
                         }
-                    } else if ui.add_enabled(!b.dirs.is_empty(), egui::Button::new(RichText::new(t(lang, "bench_start")).strong())).clicked() {
+                    } else if ui.add_enabled(b.dirs.get(b.dir_idx).is_some_and(|d| !dir_label_locked(&d.1)), egui::Button::new(RichText::new(t(lang, "bench_start")).strong())).clicked() {
                         start = true;
                     }
                     if let Some(s) = &state {

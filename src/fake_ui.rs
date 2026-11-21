@@ -104,10 +104,10 @@ impl App {
                     egui::Grid::new("fake_cfg").num_columns(2).spacing([12.0, 6.0]).show(ui, |ui| {
                         ui.label(t(lang, "bench_folder"));
                         ui.horizontal(|ui| {
-                            let shown = f.dirs.get(f.dir_idx).map(|d| d.1.clone()).unwrap_or_else(|| t(lang, "bench_no_dirs").to_string());
+                            let shown = f.dirs.get(f.dir_idx).map(|d| crate::bench_ui::dir_label(lang, &d.1)).unwrap_or_else(|| t(lang, "bench_no_dirs").to_string());
                             egui::ComboBox::from_id_salt("fake_dir").width(430.0).selected_text(shown).show_ui(ui, |ui| {
                                 for (i, (_, label)) in f.dirs.iter().enumerate() {
-                                    ui.selectable_value(&mut f.dir_idx, i, label);
+                                    ui.selectable_value(&mut f.dir_idx, i, crate::bench_ui::dir_label(lang, label));
                                 }
                             });
                             if ui.button("⟳").on_hover_text(t(lang, "bench_refresh")).clicked() {
@@ -153,7 +153,7 @@ impl App {
                         if ui.button(t(lang, "bench_stop")).clicked() {
                             stop = true;
                         }
-                    } else if ui.add_enabled(free_now.is_some(), egui::Button::new(RichText::new(t(lang, "bench_start")).strong())).clicked() {
+                    } else if ui.add_enabled(free_now.is_some() && f.dirs.get(f.dir_idx).is_some_and(|d| !crate::bench_ui::dir_label_locked(&d.1)), egui::Button::new(RichText::new(t(lang, "bench_start")).strong())).clicked() {
                         start = true;
                     }
                 });
