@@ -252,7 +252,7 @@ impl App {
         self.bench.dirs = self.bench_folders();
         self.bench.dir_idx = self.bench.dir_idx.min(self.bench.dirs.len().saturating_sub(1));
         self.bench.open = true;
-        self.grow_to = Some((1100.0, 780.0));
+        self.grow_to = Some((1260.0, 820.0));
     }
 
     pub(crate) fn bench_window(&mut self, ctx: &egui::Context) {
@@ -292,7 +292,7 @@ impl App {
             .open(&mut open)
             .resizable(true)
             .collapsible(false)
-            .default_size([(ctx.screen_rect().width() * 0.9).min(1100.0).max((ctx.screen_rect().width() * 0.98).min(860.0)), ctx.screen_rect().height() * 0.9])
+            .default_size([(ctx.screen_rect().width() * 0.9).min(1240.0).max((ctx.screen_rect().width() * 0.98).min(860.0)), ctx.screen_rect().height() * 0.9])
             .min_width((ctx.screen_rect().width() * 0.95).min(780.0))
             .max_width(ctx.screen_rect().width() * 0.98)
             .vscroll(true)

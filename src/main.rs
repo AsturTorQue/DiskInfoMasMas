@@ -2029,7 +2029,7 @@ fn main() -> eframe::Result<()> {
         .with_inner_size(arg_value(&args, "--window").and_then(|v| {
             let (w, h) = v.split_once('x')?;
             Some([w.parse::<f32>().ok()?, h.parse::<f32>().ok()?])
-        }).unwrap_or([940.0, 700.0]))
+        }).unwrap_or([1020.0, 720.0]))
         .with_min_inner_size([560.0, 480.0])
         // Matches the .desktop file name, so the desktop shows the same icon in the dock.
         .with_app_id("diskinfo");

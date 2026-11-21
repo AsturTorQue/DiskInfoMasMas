@@ -93,7 +93,7 @@ impl App {
         self.fake.dirs = self.bench_folders();
         self.fake.dir_idx = self.fake.dir_idx.min(self.fake.dirs.len().saturating_sub(1));
         self.fake.open = true;
-        self.grow_to = Some((1100.0, 780.0));
+        self.grow_to = Some((1260.0, 820.0));
     }
 
     pub(crate) fn fake_window(&mut self, ctx: &egui::Context) {
@@ -132,7 +132,7 @@ impl App {
             .open(&mut open)
             .resizable(true)
             .collapsible(false)
-            .default_size([(ctx.screen_rect().width() * 0.9).min(1100.0).max((ctx.screen_rect().width() * 0.98).min(860.0)), ctx.screen_rect().height() * 0.9])
+            .default_size([(ctx.screen_rect().width() * 0.9).min(1240.0).max((ctx.screen_rect().width() * 0.98).min(860.0)), ctx.screen_rect().height() * 0.9])
             .min_width((ctx.screen_rect().width() * 0.95).min(780.0))
             .max_width(ctx.screen_rect().width() * 0.98)
             .vscroll(true)
@@ -157,16 +157,16 @@ impl App {
                 let clip = ui.max_rect().intersect(ui.clip_rect());
                 ui.set_clip_rect(clip);
                 ui.add_enabled_ui(!running, |ui| {
-                    egui::Grid::new("fake_cfg").num_columns(2).spacing([12.0, 6.0]).show(ui, |ui| {
+                    egui::Grid::new("fake_cfg").num_columns(2).min_col_width(120.0).spacing([12.0, 6.0]).show(ui, |ui| {
                         ui.label(t(lang, "fake_mode"));
                         ui.vertical(|ui| {
                             ui.selectable_value(&mut f.quick, true, t(lang, "fake_mode_quick"));
                             ui.selectable_value(&mut f.quick, false, t(lang, "fake_mode_full"));
                         });
                         ui.end_row();
-                        if !f.quick {
-                        ui.label(t(lang, "fake_amount"));
-                        ui.horizontal(|ui| {
+                        // Always there (greyed out in quick mode), so choosing a mode moves nothing.
+                        ui.add_enabled(!f.quick, egui::Label::new(t(lang, "fake_amount")));
+                        ui.add_enabled_ui(!f.quick, |ui| ui.horizontal(|ui| {
                             let pct = PERCENTS[f.pct_idx];
                             egui::ComboBox::from_id_salt("fake_pct")
                                 .selected_text(if pct == 100 { t(lang, "fake_all").to_string() } else { format!("{pct} %") })
@@ -179,18 +179,20 @@ impl App {
                             if let Some(free) = free_now {
                                 ui.label(RichText::new(format!("≈ {} / {} {}", gb(amount(free, pct)), gb(free), t(lang, "col_free").to_lowercase())).color(pal.muted));
                             }
-                        });
+                        }));
                         ui.end_row();
-                        }
                     });
                 });
-                if f.quick {
-                    let key = if raw.is_some() { "fake_quick_raw_hint" } else { "fake_quick_hint" };
-                    ui.label(RichText::new(t(lang, key)).color(pal.muted));
-                }
-                if !f.quick && PERCENTS[f.pct_idx] >= 50 && !running {
-                    ui.label(RichText::new(t(lang, "fake_pct_warn")).color(pal.caution));
-                }
+                // A text area of the same height in both modes.
+                ui.allocate_ui_with_layout(egui::Vec2::new(ui.available_width(), 84.0), egui::Layout::top_down(egui::Align::Min), |ui| {
+                    ui.set_min_height(84.0);
+                    if f.quick {
+                        let key = if raw.is_some() { "fake_quick_raw_hint" } else { "fake_quick_hint" };
+                        ui.label(RichText::new(t(lang, key)).color(pal.muted));
+                    } else if PERCENTS[f.pct_idx] >= 50 && !running {
+                        ui.label(RichText::new(t(lang, "fake_pct_warn")).color(pal.caution));
+                    }
+                });
                 ui.add_space(6.0);
                 ui.horizontal(|ui| {
                     if running {
