@@ -93,6 +93,7 @@ impl App {
         self.fake.dirs = self.bench_folders();
         self.fake.dir_idx = self.fake.dir_idx.min(self.fake.dirs.len().saturating_sub(1));
         self.fake.open = true;
+        self.grow_to = Some((1100.0, 780.0));
     }
 
     pub(crate) fn fake_window(&mut self, ctx: &egui::Context) {

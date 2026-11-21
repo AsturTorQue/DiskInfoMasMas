@@ -141,6 +141,9 @@ struct App {
     save_image: Option<ImageJob>,
     /// `--minimized`: minimise the window on the first frame (started at login).
     minimize_first: bool,
+    /// A test window was just opened: make the main window at least this big (points), since
+    /// its windows cannot be larger than the window that holds them.
+    grow_to: Option<(f32, f32)>,
     /// `--try-bench`: run a small speed test from the window, print it and quit.
     try_bench: bool,
     /// `--try-save`: save the report as text and picture, then quit (to check saving works).
@@ -218,6 +221,7 @@ impl App {
             try_save: None,
             try_bench: false,
             minimize_first: false,
+            grow_to: None,
             applied_theme: None,
             passwordless: false,
             show_pw: false,
@@ -1308,6 +1312,12 @@ impl eframe::App for App {
             }
         }
 
+        if let Some((w, h)) = self.grow_to.take() {
+            let cur = ctx.screen_rect().size();
+            if cur.x < w || cur.y < h {
+                ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(cur.x.max(w), cur.y.max(h))));
+            }
+        }
         self.bench_window(ctx);
         self.fake_window(ctx);
         if self.try_bench {
@@ -2019,7 +2029,7 @@ fn main() -> eframe::Result<()> {
         .with_inner_size(arg_value(&args, "--window").and_then(|v| {
             let (w, h) = v.split_once('x')?;
             Some([w.parse::<f32>().ok()?, h.parse::<f32>().ok()?])
-        }).unwrap_or([760.0, 660.0]))
+        }).unwrap_or([940.0, 700.0]))
         .with_min_inner_size([560.0, 480.0])
         // Matches the .desktop file name, so the desktop shows the same icon in the dock.
         .with_app_id("diskinfo");

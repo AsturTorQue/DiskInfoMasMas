@@ -252,6 +252,7 @@ impl App {
         self.bench.dirs = self.bench_folders();
         self.bench.dir_idx = self.bench.dir_idx.min(self.bench.dirs.len().saturating_sub(1));
         self.bench.open = true;
+        self.grow_to = Some((1100.0, 780.0));
     }
 
     pub(crate) fn bench_window(&mut self, ctx: &egui::Context) {
