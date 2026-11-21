@@ -18,6 +18,8 @@ pub struct FakeUi {
     pub pct_idx: usize,
     /// Quick mode (samples over the whole space) instead of the full test.
     pub quick: bool,
+    /// The drive a raw test ran on: after it the person's partition is unmounted, so this drive is chosen.
+    pub after_dev: Option<String>,
     pub handle: Option<fakecheck::Handle>,
     pub last: Option<State>,
     /// What the drive claims to hold, and what was free when the test began.
@@ -29,7 +31,7 @@ pub struct FakeUi {
 
 impl Default for FakeUi {
     fn default() -> Self {
-        FakeUi { open: false, dirs: Vec::new(), dir_idx: 0, pct_idx: 1, quick: true, handle: None, last: None, claimed: None, free_at_start: 0, auto_start: false }
+        FakeUi { open: false, dirs: Vec::new(), dir_idx: 0, pct_idx: 1, quick: true, after_dev: None, handle: None, last: None, claimed: None, free_at_start: 0, auto_start: false }
     }
 }
 
@@ -44,7 +46,7 @@ impl App {
     /// What the disk that holds `dir` says its size is.
     pub(crate) fn claimed_capacity(&self, dir: &Path) -> Option<u64> {
         let mut best: Option<(usize, u64)> = None;
-        for d in &self.disks {
+        for d in self.pick_disks() {
             for p in &d.partitions {
                 for m in &p.mounts {
                     let md = crate::bench_ui::mount_dir(m);
@@ -65,7 +67,7 @@ impl App {
             return None;
         }
         let mut best: Option<(usize, &crate::disks::Disk)> = None;
-        for d in &self.disks {
+        for d in self.pick_disks() {
             if Path::new(&format!("/dev/{}", d.dev)) == dir && best.is_none() {
                 best = Some((0, d));
             }
@@ -112,6 +114,8 @@ impl App {
             } else {
                 self.fake.last = live.clone();
                 self.fake.handle = None;
+                // The drives changed (a raw test unmounts them): read them again.
+                self.storage_force = true;
             }
         }
         let running = self.fake.handle.is_some();
@@ -146,11 +150,10 @@ impl App {
                 cols[0].set_clip_rect(clip);
                 cols[0].add_enabled_ui(!running, |ui| {
                     let mode = if f.quick { crate::drive_picker::PickMode::FakeQuick } else { crate::drive_picker::PickMode::FakeFull };
-                    if self.drive_picker(ui, &f.dirs, &mut f.dir_idx, mode, 170.0) {
-                        refresh = true;
-                    }
-                    if let Some(p) = crate::bench_ui::mount_row(ui, lang, f.dirs.get(f.dir_idx)) {
-                        mounted = Some(p);
+                    let (r, m) = self.drive_picker(ui, &f.dirs, &mut f.dir_idx, mode, 170.0);
+                    refresh |= r;
+                    if m.is_some() {
+                        mounted = m;
                     }
                 });
                 let ui = &mut cols[1];
@@ -166,7 +169,7 @@ impl App {
                         ui.end_row();
                         // Always there (greyed out in quick mode), so choosing a mode moves nothing.
                         ui.add_enabled(!f.quick, egui::Label::new(t(lang, "fake_amount")));
-                        ui.add_enabled_ui(!f.quick, |ui| ui.horizontal(|ui| {
+                        ui.add_enabled_ui(!f.quick, |ui| ui.vertical(|ui| {
                             let pct = PERCENTS[f.pct_idx];
                             egui::ComboBox::from_id_salt("fake_pct")
                                 .selected_text(if pct == 100 { t(lang, "fake_all").to_string() } else { format!("{pct} %") })
@@ -314,10 +317,13 @@ impl App {
             });
 
         if let Some(p) = mounted {
+            // Read the drives again at once, so the new mount is there to choose.
+            self.storage = crate::disks::storage_snapshot();
             f.dirs = self.bench_folders();
             f.dir_idx = f.dirs.iter().position(|d| d.0 == p).unwrap_or(0);
         }
         if refresh {
+            self.storage_force = true;
             f.dirs = self.bench_folders();
             f.dir_idx = f.dir_idx.min(f.dirs.len().saturating_sub(1));
         }
@@ -338,12 +344,17 @@ impl App {
                     let out = std::process::Command::new("udisksctl").args(["unmount", "-b", p]).output();
                     match out {
                         Ok(o) if o.status.success() => None,
+                        // Already unmounted (by an earlier test or from outside): nothing to do.
+                        Ok(o) if String::from_utf8_lossy(&o.stderr).contains("not mounted") => None,
                         Ok(o) => Some(String::from_utf8_lossy(&o.stderr).trim().to_string()),
                         Err(e) => Some(e.to_string()),
                     }
                 });
                 match failed {
-                    None => f.handle = Some(crate::rawcheck::start(dev)),
+                    None => {
+                        f.after_dev = dev.strip_prefix("/dev/").map(str::to_string);
+                        f.handle = Some(crate::rawcheck::start(dev));
+                    }
                     Some(e) => {
                         let mut s = State::new(&fakecheck::Config { dir: PathBuf::new(), bytes: 0, quick: true });
                         s.phase = Phase::Failed(e);

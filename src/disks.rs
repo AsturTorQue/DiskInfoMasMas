@@ -291,6 +291,19 @@ fn smartctl_read(path: &str, dtype: Option<&str>) -> SmartRead {
 }
 
 /// Full scan. With `admin`, one administrator prompt reads every disk (Linux and macOS).
+/// The drives with their partitions and mount points, without reading S.M.A.R.T. (quick, no
+/// administrator rights): what the test windows need to list USB sticks and mounts as they are now.
+pub fn storage_snapshot() -> Vec<Disk> {
+    #[cfg(target_os = "linux")]
+    {
+        list_disks()
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        scan_other(false).disks
+    }
+}
+
 pub fn scan(admin: bool) -> ScanResult {
     #[cfg(target_os = "linux")]
     {

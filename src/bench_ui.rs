@@ -148,29 +148,6 @@ pub(crate) fn mount_device(dev: &Path) -> Result<PathBuf, String> {
     }
 }
 
-/// Under the folder list: a "Mount" button when the chosen entry is a partition that is not
-/// mounted. Returns the folder once it is mounted.
-pub(crate) fn mount_row(ui: &mut egui::Ui, lang: crate::i18n::Lang, selected: Option<&(PathBuf, String)>) -> Option<PathBuf> {
-    let (dev, _) = selected.filter(|d| d.1.ends_with(UNMOUNTED))?;
-    let id = egui::Id::new("mount_msg");
-    let mut done = None;
-    ui.horizontal(|ui| {
-        if ui.button(t(lang, "bench_mount")).clicked() {
-            match mount_device(dev) {
-                Ok(p) => {
-                    ui.ctx().data_mut(|d| d.remove::<String>(id));
-                    done = Some(p);
-                }
-                Err(e) => ui.ctx().data_mut(|d| d.insert_temp(id, e)),
-            }
-        }
-        if let Some(msg) = ui.ctx().data(|d| d.get_temp::<String>(id)) {
-            ui.label(RichText::new(msg).small());
-        }
-    });
-    done
-}
-
 const LOCKED: &str = " [x]";
 
 /// The label as shown: the marker of a folder without write access becomes words.
@@ -209,7 +186,7 @@ impl App {
                 out.push((dir, format!("{label}{LOCKED}")));
             }
         };
-        for d in &self.disks {
+        for d in self.pick_disks() {
             for p in &d.partitions {
                 for m in &p.mounts {
                     let free = p.free.map(|f| format!(" · {} {}", self.bytes_text(f), t(self.settings.language, "col_free").to_lowercase())).unwrap_or_default();
@@ -227,7 +204,7 @@ impl App {
         }
         // Partitions that are not mounted (a USB stick just plugged in): offered with a Mount button.
         #[cfg(target_os = "linux")]
-        for d in &self.disks {
+        for d in self.pick_disks() {
             for p in &d.partitions {
                 let fs = p.fs.as_str();
                 let skip = fs.is_empty() || ["swap", "LVM", "raid", "crypto", "zfs_member"].iter().any(|k| fs.contains(k)) || p.kind.contains("EFI System");
@@ -240,7 +217,7 @@ impl App {
         }
         // Every whole drive, for the quick fake-drive test.
         #[cfg(target_os = "linux")]
-        for d in &self.disks {
+        for d in self.pick_disks() {
             if !d.dev.is_empty() && !d.partitions.is_empty() {
                 out.push((PathBuf::from(format!("/dev/{}", d.dev)), format!("/dev/{} — {}{WHOLE}", d.dev, d.model)));
             }
@@ -303,11 +280,10 @@ impl App {
                 let clip = cols[0].max_rect().intersect(cols[0].clip_rect());
                 cols[0].set_clip_rect(clip);
                 cols[0].add_enabled_ui(!running, |ui| {
-                    if self.drive_picker(ui, &b.dirs, &mut b.dir_idx, crate::drive_picker::PickMode::Speed, 80.0) {
-                        refresh = true;
-                    }
-                    if let Some(p) = mount_row(ui, lang, b.dirs.get(b.dir_idx)) {
-                        mounted = Some(p);
+                    let (r, m) = self.drive_picker(ui, &b.dirs, &mut b.dir_idx, crate::drive_picker::PickMode::Speed, 80.0);
+                    refresh |= r;
+                    if m.is_some() {
+                        mounted = m;
                     }
                 });
                 let ui = &mut cols[1];
@@ -348,18 +324,23 @@ impl App {
                                     ui.selectable_value(&mut b.size_idx, i, *label);
                                 }
                             });
-                            ui.label(t(lang, "bench_runs"));
-                            ui.add(egui::DragValue::new(&mut b.runs).range(1..=9));
-                            ui.label(t(lang, "bench_secs"));
-                            ui.add(egui::DragValue::new(&mut b.secs).range(1..=60).suffix(" s"));
-                            ui.label(t(lang, "bench_interval"));
-                            ui.add(egui::DragValue::new(&mut b.interval).range(0..=30).suffix(" s"));
                         });
                         ui.end_row();
                     });
+                    // The numbers go on their own line that wraps, so nothing is drawn over anything.
+                    ui.horizontal_wrapped(|ui| {
+                        ui.label(t(lang, "bench_runs"));
+                        ui.add(egui::DragValue::new(&mut b.runs).range(1..=9));
+                        ui.add_space(8.0);
+                        ui.label(t(lang, "bench_secs"));
+                        ui.add(egui::DragValue::new(&mut b.secs).range(1..=60).suffix(" s"));
+                        ui.add_space(8.0);
+                        ui.label(t(lang, "bench_interval"));
+                        ui.add(egui::DragValue::new(&mut b.interval).range(0..=30).suffix(" s"));
+                    });
                 });
                 ui.add_space(6.0);
-                ui.horizontal(|ui| {
+                ui.horizontal_wrapped(|ui| {
                     if running {
                         if ui.add(egui::Button::new(RichText::new(t(lang, "bench_stop")).size(18.0).strong()).min_size(egui::Vec2::new(200.0, 44.0))).clicked() {
                             stop = true;
@@ -440,10 +421,13 @@ impl App {
             });
 
         if let Some(p) = mounted {
+            // Read the drives again at once, so the new mount is there to choose.
+            self.storage = crate::disks::storage_snapshot();
             b.dirs = self.bench_folders();
             b.dir_idx = b.dirs.iter().position(|d| d.0 == p).unwrap_or(0);
         }
         if refresh {
+            self.storage_force = true;
             b.dirs = self.bench_folders();
             b.dir_idx = b.dir_idx.min(b.dirs.len().saturating_sub(1));
         }

@@ -87,14 +87,15 @@ impl App {
     }
 
     /// Draws the panel. Returns true when the refresh button was pressed.
-    pub(crate) fn drive_picker(&self, ui: &mut egui::Ui, dirs: &[(PathBuf, String)], idx: &mut usize, mode: PickMode, reserve: f32) -> bool {
+    pub(crate) fn drive_picker(&self, ui: &mut egui::Ui, dirs: &[(PathBuf, String)], idx: &mut usize, mode: PickMode, reserve: f32) -> (bool, Option<PathBuf>) {
         let lang = self.settings.language;
         let pal = self.pal();
         let mut refresh = false;
+        let mut mounted: Option<PathBuf> = None;
         // For the fake-drive test only drives that can be tested are shown, unless asked for all.
         let all_id = egui::Id::new("pick_show_all");
         let mut all = mode == PickMode::Speed || ui.ctx().data(|d| d.get_temp::<bool>(all_id)).unwrap_or(false);
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             ui.label(RichText::new(t(lang, "pick_title")).strong());
             if ui.button("⟳").on_hover_text(t(lang, "bench_refresh")).clicked() {
                 refresh = true;
@@ -104,7 +105,7 @@ impl App {
             }
         });
         // Removable drives first, then other drives, the system's own last.
-        let mut disks: Vec<&Disk> = self.disks.iter().collect();
+        let mut disks: Vec<&Disk> = self.pick_disks().iter().collect();
         disks.sort_by_key(|d| (is_system_disk(d), !removable(d)));
         let mut shown_any = false;
         let mut visible: Vec<usize> = Vec::new();
@@ -220,7 +221,22 @@ impl App {
                                 *idx = i;
                             }
                         }
-                        ui.label(RichText::new(format!("   {status}")).small().strong().color(color));
+                        ui.horizontal(|ui| {
+                            ui.label(RichText::new(format!("   {status}")).small().strong().color(color));
+                            if access == Access::Unmounted {
+                                // Mount it from here, like a file manager does.
+                                if ui.small_button(t(lang, "bench_mount")).clicked() {
+                                    let dev = PathBuf::from(format!("/dev/{}", p.name));
+                                    match crate::bench_ui::mount_device(&dev) {
+                                        Ok(dir) => {
+                                            ui.ctx().data_mut(|d| d.remove::<String>(egui::Id::new("mount_msg")));
+                                            mounted = Some(dir);
+                                        }
+                                        Err(e) => ui.ctx().data_mut(|d| d.insert_temp(egui::Id::new("mount_msg"), e)),
+                                    }
+                                }
+                            }
+                        });
                     }
                 });
                 ui.add_space(4.0);
@@ -262,7 +278,11 @@ impl App {
         } else {
             ui.label(RichText::new(t(lang, "bench_no_dirs")).color(pal.muted));
         }
-        refresh
+        // Why a mount failed, under the list.
+        if let Some(msg) = ui.ctx().data(|d| d.get_temp::<String>(egui::Id::new("mount_msg"))) {
+            ui.label(RichText::new(msg).small().color(pal.bad));
+        }
+        (refresh, mounted)
     }
 
     /// The sentence that says what will happen, and its colour (green: nothing at risk).

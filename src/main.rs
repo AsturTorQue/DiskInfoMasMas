@@ -129,6 +129,11 @@ struct App {
     selected: usize,
     settings: Settings,
     scanning: Option<Receiver<ScanResult>>,
+    /// Drives as the system lists them right now (for the test windows), refreshed while one is open.
+    storage: Vec<Disk>,
+    storage_rx: Option<Receiver<Vec<Disk>>>,
+    storage_at: Option<Instant>,
+    storage_force: bool,
     scan_admin: bool,
     needs_admin: bool,
     direct_ok: bool,
@@ -209,6 +214,10 @@ impl App {
             selected: 0,
             settings,
             scanning: None,
+            storage: Vec::new(),
+            storage_rx: None,
+            storage_at: None,
+            storage_force: false,
             scan_admin: false,
             needs_admin: false,
             direct_ok: false,
@@ -273,6 +282,68 @@ impl App {
 
     fn pal(&self) -> Palette {
         self.settings.theme.palette()
+    }
+
+    /// The drives the test windows list: the fresh listing when there is one.
+    pub(crate) fn pick_disks(&self) -> &Vec<Disk> {
+        if self.storage.is_empty() {
+            &self.disks
+        } else {
+            &self.storage
+        }
+    }
+
+    /// While a test window is open, keeps the list of drives and mounts up to date (a USB stick
+    /// plugged in or mounted from outside shows up without closing the program).
+    fn tick_storage(&mut self, ctx: &egui::Context) {
+        if self.quiet || !(self.bench.open || self.fake.open) {
+            return;
+        }
+        if let Some(rx) = &self.storage_rx {
+            if let Ok(list) = rx.try_recv() {
+                self.storage_rx = None;
+                self.storage_at = Some(Instant::now());
+                if !list.is_empty() {
+                    let sig = |l: &Vec<Disk>| -> String {
+                        l.iter().map(|d| format!("{}:{}:{:?}", d.dev, d.size_bytes, d.partitions.iter().map(|p| (&p.name, &p.mounts, &p.fs)).collect::<Vec<_>>())).collect()
+                    };
+                    let changed = sig(&list) != sig(&self.storage);
+                    self.storage = list;
+                    if changed {
+                        self.rebuild_test_dirs();
+                    }
+                }
+            }
+            ctx.request_repaint_after(Duration::from_millis(250));
+            return;
+        }
+        let busy = self.bench.handle.is_some() || self.fake.handle.is_some();
+        let periodic = cfg!(target_os = "linux") && !busy;
+        let due = self.storage_force || self.storage_at.is_none() || (periodic && self.storage_at.is_some_and(|t| t.elapsed() > Duration::from_secs(3)));
+        if due {
+            self.storage_force = false;
+            let (tx, rx) = channel();
+            std::thread::spawn(move || {
+                let _ = tx.send(disks::storage_snapshot());
+            });
+            self.storage_rx = Some(rx);
+        }
+        ctx.request_repaint_after(Duration::from_secs(1));
+    }
+
+    /// Rebuilds the folder lists of the test windows, keeping what was chosen when it still exists.
+    pub(crate) fn rebuild_test_dirs(&mut self) {
+        let dirs = self.bench_folders();
+        let keep = |old: &Vec<(PathBuf, String)>, idx: usize| old.get(idx).and_then(|d| dirs.iter().position(|n| n.0 == d.0));
+        let b_idx = keep(&self.bench.dirs, self.bench.dir_idx);
+        let f_idx = keep(&self.fake.dirs, self.fake.dir_idx);
+        let after = self.fake.after_dev.take();
+        self.bench.dirs = dirs.clone();
+        self.bench.dir_idx = b_idx.unwrap_or(0);
+        // After a test the chosen partition may be gone (unmounted): fall back to its whole drive.
+        let fallback = after.and_then(|dev| dirs.iter().position(|n| n.0 == PathBuf::from(format!("/dev/{dev}"))));
+        self.fake.dir_idx = f_idx.or(fallback).unwrap_or(0);
+        self.fake.dirs = dirs;
     }
 
     fn start_scan(&mut self, admin: bool) {
@@ -1318,6 +1389,7 @@ impl eframe::App for App {
                 ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(cur.x.max(w), cur.y.max(h))));
             }
         }
+        self.tick_storage(ctx);
         self.bench_window(ctx);
         self.fake_window(ctx);
         if self.try_bench {
