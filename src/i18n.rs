@@ -472,6 +472,15 @@ const TEXTS: &[(&str, [&str; 6])] = &[
         "Administratorrechte werden angefordert und {parts} wird ausgehängt. Einige hundert kleine Stellen von {dev} werden getestet und jeweils wiederhergestellt: nichts wird gelöscht. Bei Stromausfall oder Abziehen mittendrin könnten diese Stellen verändert bleiben.",
         "Verranno richiesti i permessi di amministratore e {parts} verrà smontato. Alcune centinaia di piccole zone di {dev} vengono provate e ognuna viene ripristinata com'era: non si cancella nulla. Se manca la corrente o si scollega l'unità a metà, quelle zone potrebbero restare alterate.",
     ]),
+    ("pick_whole", ["toda la unidad (modo rápido)", "whole drive (quick mode)", "unidade inteira (modo rápido)", "disque entier (mode rapide)", "ganzes Laufwerk (Schnellmodus)", "intera unità (modalità rapida)"]),
+    ("pick_will_whole", [
+        "La unidad entera solo se puede probar en el modo Rápido y si no contiene el sistema ni tu carpeta personal. Elige el modo Rápido o una partición.",
+        "The whole drive can only be tested in Quick mode and only if it holds neither the system nor your home folder. Choose Quick mode or a partition.",
+        "A unidade inteira só pode ser testada no modo Rápido e se não contiver o sistema nem a sua pasta pessoal. Escolha o modo Rápido ou uma partição.",
+        "Le disque entier ne peut être testé qu'en mode Rapide et s'il ne contient ni le système ni votre dossier personnel. Choisissez le mode Rapide ou une partition.",
+        "Das ganze Laufwerk kann nur im Schnellmodus getestet werden und nur, wenn es weder das System noch Ihren Home-Ordner enthält. Schnellmodus oder eine Partition wählen.",
+        "L'intera unità può essere provata solo in modalità Rapida e solo se non contiene il sistema né la tua cartella personale. Scegli la modalità Rapida o una partizione.",
+    ]),
     ("fake_menu", ["Comprobar si la unidad es falsa…", "Check if the drive is fake…", "Verificar se a unidade é falsa…", "Vérifier si le disque est un faux…", "Prüfen, ob das Laufwerk gefälscht ist…", "Verifica se l'unità è contraffatta…"]),
     ("fake_title", ["Comprobar si la unidad es falsa", "Check if the drive is fake", "Verificar se a unidade é falsa", "Vérifier si le disque est un faux", "Prüfen, ob das Laufwerk gefälscht ist", "Verifica se l'unità è contraffatta"]),
     ("fake_intro", [

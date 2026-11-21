@@ -66,6 +66,9 @@ impl App {
         }
         let mut best: Option<(usize, &crate::disks::Disk)> = None;
         for d in &self.disks {
+            if Path::new(&format!("/dev/{}", d.dev)) == dir && best.is_none() {
+                best = Some((0, d));
+            }
             for p in &d.partitions {
                 if Path::new(&format!("/dev/{}", p.name)) == dir && best.is_none() {
                     best = Some((0, d));
@@ -127,23 +130,32 @@ impl App {
             .open(&mut open)
             .resizable(true)
             .collapsible(false)
-            .default_width(680.0_f32.min(ctx.screen_rect().width() * 0.94))
-            .min_width(520.0)
-            .max_width(ctx.screen_rect().width() * 0.96)
+            .default_width((ctx.screen_rect().width() * 0.9).min(1100.0))
+            .min_width(ctx.screen_rect().width().min(760.0) * 0.8)
+            .max_width(ctx.screen_rect().width() * 0.98)
             .vscroll(true)
-            .default_height(ctx.screen_rect().height() * 0.88)
+            .default_height(ctx.screen_rect().height() * 0.9)
             .show(ctx, |ui| {
                 ui.label(t(lang, "fake_intro"));
                 ui.add_space(6.0);
-                ui.add_enabled_ui(!running, |ui| {
+                // Two columns when the window is wide, one under the other when it is not.
+                let wide = ui.available_width() >= 820.0;
+                ui.columns(if wide { 2 } else { 1 }, |cols| {
+                cols[0].add_enabled_ui(!running, |ui| {
                     let mode = if f.quick { crate::drive_picker::PickMode::FakeQuick } else { crate::drive_picker::PickMode::FakeFull };
-                    if self.drive_picker(ui, &f.dirs, &mut f.dir_idx, mode, 400.0) {
+                    if self.drive_picker(ui, &f.dirs, &mut f.dir_idx, mode, 170.0) {
                         refresh = true;
                     }
                     if let Some(p) = crate::bench_ui::mount_row(ui, lang, f.dirs.get(f.dir_idx)) {
                         mounted = Some(p);
                     }
-                    ui.add_space(6.0);
+                });
+                let second = if wide { 1 } else { 0 };
+                let ui = &mut cols[second];
+                if !wide {
+                    ui.add_space(8.0);
+                }
+                ui.add_enabled_ui(!running, |ui| {
                     egui::Grid::new("fake_cfg").num_columns(2).spacing([12.0, 6.0]).show(ui, |ui| {
                         ui.label(t(lang, "fake_mode"));
                         ui.horizontal(|ui| {
@@ -201,9 +213,13 @@ impl App {
                     };
                     if running {
                         ui.add(egui::ProgressBar::new(s.fraction).show_percentage().text(status));
+                    } else if matches!(s.phase, Phase::Failed(_)) {
+                        egui::Frame::new().fill(pal.bad).corner_radius(6).inner_margin(10).show(ui, |ui| {
+                            ui.set_width(ui.available_width());
+                            ui.label(RichText::new(status).strong().color(egui::Color32::WHITE));
+                        });
                     } else if !status.is_empty() {
-                        let color = if matches!(s.phase, Phase::Failed(_)) { pal.bad } else { pal.muted };
-                        ui.label(RichText::new(status).color(color));
+                        ui.label(RichText::new(status).color(pal.muted));
                     }
 
                     // The verdict.
@@ -291,6 +307,7 @@ impl App {
                 }
                 ui.add_space(6.0);
                 ui.label(RichText::new(t(lang, "fake_note")).small().color(pal.muted));
+                });
             });
 
         if let Some(p) = mounted {

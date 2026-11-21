@@ -127,10 +127,12 @@ fn home_inside(mount: &Path) -> Option<PathBuf> {
 /// True for a folder entry that cannot be tested in as it is: no write access, or a partition
 /// that is not mounted yet (see `bench_folders`).
 pub(crate) fn dir_label_locked(label: &str) -> bool {
-    label.ends_with(LOCKED) || label.ends_with(UNMOUNTED)
+    label.ends_with(LOCKED) || label.ends_with(UNMOUNTED) || label.ends_with(WHOLE)
 }
 
 const UNMOUNTED: &str = " [u]";
+/// A whole drive (only the quick fake-drive test works on these).
+pub(crate) const WHOLE: &str = " [w]";
 
 /// Mounts a partition the way a file manager does (no administrator needed on most desktops);
 /// returns the folder it was mounted at.
@@ -175,6 +177,8 @@ const LOCKED: &str = " [x]";
 pub(crate) fn dir_label(lang: crate::i18n::Lang, label: &str) -> String {
     if let Some(l) = label.strip_suffix(LOCKED) {
         format!("{l} - {}", t(lang, "bench_locked"))
+    } else if let Some(l) = label.strip_suffix(WHOLE) {
+        l.to_string()
     } else if let Some(l) = label.strip_suffix(UNMOUNTED) {
         format!("{l} - {}", t(lang, "bench_unmounted"))
     } else {
@@ -234,6 +238,13 @@ impl App {
                 }
             }
         }
+        // Every whole drive, for the quick fake-drive test.
+        #[cfg(target_os = "linux")]
+        for d in &self.disks {
+            if !d.dev.is_empty() && !d.partitions.is_empty() {
+                out.push((PathBuf::from(format!("/dev/{}", d.dev)), format!("/dev/{} — {}{WHOLE}", d.dev, d.model)));
+            }
+        }
         out
     }
 
@@ -279,25 +290,34 @@ impl App {
             .open(&mut open)
             .resizable(true)
             .collapsible(false)
-            .default_width(680.0_f32.min(ctx.screen_rect().width() * 0.94))
-            .min_width(520.0)
-            .max_width(ctx.screen_rect().width() * 0.96)
+            .default_width((ctx.screen_rect().width() * 0.9).min(1100.0))
+            .min_width(ctx.screen_rect().width().min(760.0) * 0.8)
+            .max_width(ctx.screen_rect().width() * 0.98)
             .vscroll(true)
-            .default_height(ctx.screen_rect().height() * 0.88)
+            .default_height(ctx.screen_rect().height() * 0.9)
             .show(ctx, |ui| {
-                ui.add_enabled_ui(!running, |ui| {
-                    if self.drive_picker(ui, &b.dirs, &mut b.dir_idx, crate::drive_picker::PickMode::Speed, 330.0) {
+                // Two columns when the window is wide, one under the other when it is not.
+                let wide = ui.available_width() >= 820.0;
+                ui.columns(if wide { 2 } else { 1 }, |cols| {
+                cols[0].add_enabled_ui(!running, |ui| {
+                    if self.drive_picker(ui, &b.dirs, &mut b.dir_idx, crate::drive_picker::PickMode::Speed, 80.0) {
                         refresh = true;
                     }
                     if let Some(p) = mount_row(ui, lang, b.dirs.get(b.dir_idx)) {
                         mounted = Some(p);
                     }
-                    ui.add_space(6.0);
+                });
+                let second = if wide { 1 } else { 0 };
+                let ui = &mut cols[second];
+                if !wide {
+                    ui.add_space(8.0);
+                }
+                ui.add_enabled_ui(!running, |ui| {
                     egui::Grid::new("bench_cfg").num_columns(2).spacing([12.0, 6.0]).show(ui, |ui| {
                         ui.label(t(lang, "bench_profile"));
                         egui::ComboBox::from_id_salt("bench_profile")
                             .selected_text(t(lang, if b.nvme_profile { "bench_prof_nvme" } else { "bench_prof_default" }))
-                            .width(430.0)
+                            .width(250.0)
                             .show_ui(ui, |ui| {
                                 ui.selectable_value(&mut b.nvme_profile, true, t(lang, "bench_prof_nvme"));
                                 ui.selectable_value(&mut b.nvme_profile, false, t(lang, "bench_prof_default"));
@@ -415,6 +435,7 @@ impl App {
                 ui.add_space(6.0);
                 ui.label(RichText::new(t(lang, "bench_note_wear")).small().color(pal.muted));
                 ui.label(RichText::new(t(lang, "bench_note_threads")).small().color(pal.muted));
+                });
             });
 
         if let Some(p) = mounted {

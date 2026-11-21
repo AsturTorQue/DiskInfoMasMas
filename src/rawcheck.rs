@@ -240,7 +240,7 @@ fn run_as_root(dev: &str, state: &Shared, cancel: &Arc<AtomicBool>) -> Result<()
         .args(["/bin/sh", "-c", &script])
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::null())
+        .stderr(Stdio::piped())
         .spawn()
         .map_err(|_| "pkexec is missing".to_string())?;
     let finished = Arc::new(AtomicBool::new(false));
@@ -268,13 +268,19 @@ fn run_as_root(dev: &str, state: &Shared, cancel: &Arc<AtomicBool>) -> Result<()
         }
     }
     let status = child.wait().map_err(|e| e.to_string())?;
+    let mut err_text = String::new();
+    if let Some(mut e) = child.stderr.take() {
+        use std::io::Read;
+        let _ = e.read_to_string(&mut err_text);
+    }
+    let err_line = err_text.lines().rev().find(|l| !l.trim().is_empty()).unwrap_or("").trim().to_string();
     finished.store(true, Ordering::Relaxed);
     let _ = stopper.join();
     let _ = std::fs::remove_file(&cancel_file);
     match last {
         Some(s) if !s.running() => Ok(()),
-        _ if matches!(status.code(), Some(126) | Some(127)) => Err("administrator rights were not granted".into()),
-        _ => Err("the test stopped before it finished".into()),
+        _ if matches!(status.code(), Some(126) | Some(127)) => Err(format!("administrator rights were not granted {err_line}").trim().to_string()),
+        _ => Err(format!("the test stopped before it finished (code {}) {err_line}", status.code().map_or("?".to_string(), |c| c.to_string())).trim().to_string()),
     }
 }
 

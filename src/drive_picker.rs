@@ -108,7 +108,19 @@ impl App {
                     ui.set_width(ui.available_width());
                     // Header: model, device, size and what kind of disk it is.
                     ui.horizontal(|ui| {
-                        ui.label(RichText::new(&d.model).strong());
+                        let whole = dirs.iter().position(|e| e.0 == Path::new(&format!("/dev/{}", d.dev)));
+                        match whole.filter(|w| mode == PickMode::FakeQuick && self.raw_target(&dirs[*w].0).is_some()) {
+                            Some(w) => {
+                                // The whole drive can be chosen for the quick test.
+                                let text = RichText::new(format!("{} - {}", d.model, t(lang, "pick_whole"))).strong();
+                                if ui.selectable_label(*idx == w, text).clicked() {
+                                    *idx = w;
+                                }
+                            }
+                            None => {
+                                ui.label(RichText::new(&d.model).strong());
+                            }
+                        }
                         ui.label(RichText::new(format!("/dev/{} · {}", d.dev, self.bytes_text(d.size_bytes))).color(pal.muted));
                         let (tag, color) = if system {
                             (t(lang, "pick_system"), pal.caution)
@@ -226,10 +238,13 @@ impl App {
         let lang = self.settings.language;
         let pal = self.pal();
         let shown = dir.display().to_string();
+        if label.ends_with(crate::bench_ui::WHOLE) && !(mode == PickMode::FakeQuick && self.raw_target(dir).is_some()) {
+            return (t(lang, "pick_will_whole").to_string(), pal.caution);
+        }
         if label.ends_with(" [u]") && !(mode == PickMode::FakeQuick && self.raw_target(dir).is_some()) {
             return (t(lang, "pick_will_mount").to_string(), pal.caution);
         }
-        if dir_label_locked(label) && !label.ends_with(" [u]") {
+        if dir_label_locked(label) && !label.ends_with(" [u]") && !label.ends_with(crate::bench_ui::WHOLE) {
             return (t(lang, "bench_locked").to_string(), pal.bad);
         }
         if mode == PickMode::FakeQuick {
