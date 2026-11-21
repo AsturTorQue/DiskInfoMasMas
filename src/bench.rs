@@ -536,6 +536,11 @@ pub fn run(cfg: Config, state: Shared, cancel: Arc<AtomicBool>) {
 fn run_inner(cfg: &Config, state: &Shared, cancel: &Arc<AtomicBool>) -> io::Result<bool> {
     // Whole megabytes, and room for the biggest block.
     let size = (cfg.size / (1 << 20)).max(1) * (1 << 20);
+    if let Some(free) = crate::platform::free_bytes(&cfg.dir) {
+        if size + (32 << 20) > free {
+            return Err(io::Error::new(io::ErrorKind::StorageFull, "the chosen size is larger than the free space of the drive"));
+        }
+    }
     update(state, |s| s.phase = Phase::Preparing);
     let tf = TestFile::create(&cfg.dir, size)?;
     update(state, |s| s.direct = tf.direct);

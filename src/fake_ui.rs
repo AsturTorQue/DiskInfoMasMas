@@ -148,11 +148,17 @@ impl App {
                 ui.label(t(lang, "fake_intro"));
                 ui.add_space(6.0);
                 // Drives on the left; mode, results and the rest on the right.
-                ui.columns(2, |cols| {
+                // Drives on the left (about 40 %), the rest on the right.
+                let total_w = ui.available_width();
+                let left_w = (total_w * 0.4).clamp(300.0, 520.0).min((total_w - 380.0).max(260.0));
+                ui.horizontal_top(|ui| {
+                let avail_h = ui.available_height();
+                ui.allocate_ui_with_layout(egui::vec2(left_w, avail_h), egui::Layout::top_down(egui::Align::Min), |ui| {
                 // What does not fit a column is cut, never drawn over the other one.
-                let clip = cols[0].max_rect().intersect(cols[0].clip_rect());
-                cols[0].set_clip_rect(clip);
-                cols[0].add_enabled_ui(!running, |ui| {
+                let mut clip = ui.clip_rect();
+                clip.max.x = clip.max.x.min(ui.max_rect().right());
+                ui.set_clip_rect(clip);
+                ui.add_enabled_ui(!running, |ui| {
                     let mode = if f.quick { crate::drive_picker::PickMode::FakeQuick } else { crate::drive_picker::PickMode::FakeFull };
                     let (r, m) = self.drive_picker(ui, &f.dirs, &mut f.dir_idx, mode, 170.0);
                     refresh |= r;
@@ -160,9 +166,13 @@ impl App {
                         mounted = m;
                     }
                 });
-                let ui = &mut cols[1];
-                let clip = ui.max_rect().intersect(ui.clip_rect());
+                });
+                ui.add_space(8.0);
+                ui.allocate_ui_with_layout(egui::vec2(ui.available_width(), avail_h), egui::Layout::top_down(egui::Align::Min), |ui| {
+                let mut clip = ui.clip_rect();
+                clip.max.x = clip.max.x.min(ui.max_rect().right());
                 ui.set_clip_rect(clip);
+                egui::ScrollArea::horizontal().id_salt("fake_right").auto_shrink([false, true]).show(ui, |ui| {
                 ui.add_enabled_ui(!running, |ui| {
                     egui::Grid::new("fake_cfg").num_columns(2).min_col_width(120.0).spacing([12.0, 6.0]).show(ui, |ui| {
                         ui.label(t(lang, "fake_mode"));
@@ -320,6 +330,8 @@ impl App {
                 }
                 ui.add_space(6.0);
                 ui.label(RichText::new(t(lang, "fake_note")).small().color(pal.muted));
+                });
+                });
                 });
             });
 

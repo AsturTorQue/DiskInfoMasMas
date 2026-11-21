@@ -39,6 +39,8 @@ pub struct BenchUi {
     pub last: Option<State>,
     /// Start a run at the next frame (used by `--try-bench`).
     pub auto_start: bool,
+    /// The folder the size was last adjusted for (so it is fitted once per folder, not every frame).
+    pub size_dir: Option<PathBuf>,
 }
 
 impl Default for BenchUi {
@@ -56,6 +58,7 @@ impl Default for BenchUi {
             handle: None,
             last: None,
             auto_start: false,
+            size_dir: None,
         }
     }
 }
@@ -267,6 +270,17 @@ impl App {
         let mut copy: Option<String> = None;
         let mut open = true;
         let (read_w, write_w) = (t(lang, "bench_read"), t(lang, "bench_write"));
+        // The test file must fit in the free space: sizes that do not are greyed out, and a size
+        // that is too big for the chosen folder is brought down to the largest that fits.
+        let free_now: Option<u64> = b.dirs.get(b.dir_idx).and_then(|d| crate::platform::free_bytes(&d.0));
+        let fits = |size: u64| free_now.map_or(true, |f| size + (32 << 20) <= f);
+        if !running && b.size_dir.as_ref() != b.dirs.get(b.dir_idx).map(|d| &d.0) {
+            b.size_dir = b.dirs.get(b.dir_idx).map(|d| d.0.clone());
+            if !fits(SIZES[b.size_idx].0) {
+                b.size_idx = (0..SIZES.len()).rev().find(|i| fits(SIZES[*i].0 )).unwrap_or(0).min(b.size_idx);
+            }
+        }
+        let size_ok = fits(SIZES[b.size_idx].0);
 
         egui::Window::new(t(lang, "bench_title").trim_end_matches('…'))
             .id(egui::Id::new("bench_window_v4"))
@@ -279,20 +293,31 @@ impl App {
             .vscroll(true)
             .show(ctx, |ui| {
                 // Drives on the left; mode, results and the rest on the right.
-                ui.columns(2, |cols| {
+                // Drives on the left (about 40 %), the rest on the right.
+                let total_w = ui.available_width();
+                let left_w = (total_w * 0.4).clamp(300.0, 520.0).min((total_w - 380.0).max(260.0));
+                ui.horizontal_top(|ui| {
+                let avail_h = ui.available_height();
+                ui.allocate_ui_with_layout(egui::vec2(left_w, avail_h), egui::Layout::top_down(egui::Align::Min), |ui| {
                 // What does not fit a column is cut, never drawn over the other one.
-                let clip = cols[0].max_rect().intersect(cols[0].clip_rect());
-                cols[0].set_clip_rect(clip);
-                cols[0].add_enabled_ui(!running, |ui| {
+                let mut clip = ui.clip_rect();
+                clip.max.x = clip.max.x.min(ui.max_rect().right());
+                ui.set_clip_rect(clip);
+                ui.add_enabled_ui(!running, |ui| {
                     let (r, m) = self.drive_picker(ui, &b.dirs, &mut b.dir_idx, crate::drive_picker::PickMode::Speed, 80.0);
                     refresh |= r;
                     if m.is_some() {
                         mounted = m;
                     }
                 });
-                let ui = &mut cols[1];
-                let clip = ui.max_rect().intersect(ui.clip_rect());
+                });
+                ui.add_space(8.0);
+                ui.allocate_ui_with_layout(egui::vec2(ui.available_width(), avail_h), egui::Layout::top_down(egui::Align::Min), |ui| {
+                let mut clip = ui.clip_rect();
+                clip.max.x = clip.max.x.min(ui.max_rect().right());
                 ui.set_clip_rect(clip);
+                // A table wider than the column scrolls sideways instead of being cut.
+                egui::ScrollArea::horizontal().id_salt("bench_right").auto_shrink([false, true]).show(ui, |ui| {
                 ui.add_enabled_ui(!running, |ui| {
                     egui::Grid::new("bench_cfg").num_columns(2).spacing([12.0, 6.0]).show(ui, |ui| {
                         ui.label(t(lang, "bench_profile"));
@@ -324,13 +349,17 @@ impl App {
                         ui.label(t(lang, "bench_size"));
                         ui.horizontal(|ui| {
                             egui::ComboBox::from_id_salt("bench_size").selected_text(SIZES[b.size_idx].1).show_ui(ui, |ui| {
-                                for (i, (_, label)) in SIZES.iter().enumerate() {
-                                    ui.selectable_value(&mut b.size_idx, i, *label);
+                                for (i, (size, label)) in SIZES.iter().enumerate() {
+                                    ui.add_enabled_ui(fits(*size), |ui| ui.selectable_value(&mut b.size_idx, i, *label));
                                 }
                             });
                         });
                         ui.end_row();
                     });
+                    if !size_ok {
+                        let free_text = free_now.map(|f| self.bytes_text(f)).unwrap_or_default();
+                        ui.label(RichText::new(t(lang, "bench_size_warn").replace("{free}", &free_text)).color(pal.caution));
+                    }
                     // The numbers go on their own line that wraps, so nothing is drawn over anything.
                     ui.horizontal_wrapped(|ui| {
                         ui.label(t(lang, "bench_runs"));
@@ -349,7 +378,7 @@ impl App {
                         if ui.add(egui::Button::new(RichText::new(t(lang, "bench_stop")).size(18.0).strong()).min_size(egui::Vec2::new(200.0, 44.0))).clicked() {
                             stop = true;
                         }
-                    } else if ui.add_enabled(b.dirs.get(b.dir_idx).is_some_and(|d| !dir_label_locked(&d.1)), egui::Button::new(RichText::new(t(lang, "bench_start")).size(18.0).strong()).min_size(egui::Vec2::new(200.0, 44.0))).clicked() {
+                    } else if ui.add_enabled(size_ok && b.dirs.get(b.dir_idx).is_some_and(|d| !dir_label_locked(&d.1)), egui::Button::new(RichText::new(t(lang, "bench_start")).size(18.0).strong()).min_size(egui::Vec2::new(200.0, 44.0))).clicked() {
                         start = true;
                     }
                     if let Some(s) = &state {
@@ -421,6 +450,8 @@ impl App {
                 ui.add_space(6.0);
                 ui.label(RichText::new(t(lang, "bench_note_wear")).small().color(pal.muted));
                 ui.label(RichText::new(t(lang, "bench_note_threads")).small().color(pal.muted));
+                });
+                });
                 });
             });
 

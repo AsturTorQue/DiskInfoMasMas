@@ -100,9 +100,6 @@ impl App {
             if ui.button("⟳").on_hover_text(t(lang, "bench_refresh")).clicked() {
                 refresh = true;
             }
-            if ui.button(t(lang, "pick_folder_btn")).clicked() {
-                ui.ctx().data_mut(|d| d.insert_temp(egui::Id::new("pick_folder_req"), true));
-            }
             if mode != PickMode::Speed && ui.checkbox(&mut all, t(lang, "pick_show_all")).changed() {
                 ui.ctx().data_mut(|d| d.insert_temp(all_id, all));
             }
@@ -245,6 +242,12 @@ impl App {
                 ui.add_space(4.0);
             }
             // Folders that belong to no listed disk (the documents folder, other mounts).
+            // Pick any folder by hand (like H2testw): below the drives, before the other folders.
+            ui.add_space(2.0);
+            if ui.button(t(lang, "pick_folder_btn")).clicked() {
+                ui.ctx().data_mut(|d| d.insert_temp(egui::Id::new("pick_folder_req"), true));
+            }
+            ui.add_space(2.0);
             // Folders chosen by hand are always listed; the rest only when everything is shown.
             let others: Vec<usize> = (0..dirs.len())
                 .filter(|i| !matched[*i] && !dirs[*i].0.starts_with("/dev/") && (all || self.custom_dirs.contains(&dirs[*i].0)))
