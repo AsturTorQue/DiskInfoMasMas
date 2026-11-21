@@ -117,6 +117,13 @@ fn system_mounts() -> Vec<(PathBuf, String)> {
     v
 }
 
+/// The person's home folder when it is inside `mount` and can be written to.
+fn home_inside(mount: &Path) -> Option<PathBuf> {
+    let home = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")).map(PathBuf::from)?;
+    let (home, mount) = (home.canonicalize().ok()?, mount.canonicalize().ok()?);
+    (home.starts_with(&mount) && writable(&home)).then_some(home)
+}
+
 /// True for a folder entry that the person cannot write to (see `bench_folders`).
 pub(crate) fn dir_label_locked(label: &str) -> bool {
     label.ends_with(LOCKED)
@@ -137,10 +144,22 @@ impl App {
     pub(crate) fn bench_folders(&self) -> Vec<(PathBuf, String)> {
         let mut out: Vec<(PathBuf, String)> = Vec::new();
         let add = |dir: PathBuf, label: String, out: &mut Vec<(PathBuf, String)>| {
-            if !out.iter().any(|(p, _)| *p == dir) && dir.is_dir() {
+            if !dir.is_dir() {
+                return;
+            }
+            if writable(&dir) {
+                if !out.iter().any(|(p, _)| *p == dir) {
+                    out.push((dir, label));
+                }
+            } else if let Some(home) = home_inside(&dir) {
+                // The root of the mount belongs to the system (like /var/home), but the person's
+                // own folder on it can be written to.
+                if !out.iter().any(|(p, _)| *p == home) {
+                    out.push((home.clone(), format!("{label} > {}", home.display())));
+                }
+            } else if !out.iter().any(|(p, _)| *p == dir) {
                 // A mounted drive the person cannot write to is still listed, marked.
-                let label = if writable(&dir) { label } else { format!("{label}{LOCKED}") };
-                out.push((dir, label));
+                out.push((dir, format!("{label}{LOCKED}")));
             }
         };
         for d in &self.disks {
@@ -376,3 +395,4 @@ impl App {
         }
     }
 }
+
