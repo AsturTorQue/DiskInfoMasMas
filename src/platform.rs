@@ -20,6 +20,28 @@ fn home() -> Option<PathBuf> {
     std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")).map(PathBuf::from)
 }
 
+/// The person's Documents folder (falls back to the home folder).
+pub fn documents_dir() -> Option<PathBuf> {
+    let home = home()?;
+    #[cfg(target_os = "linux")]
+    {
+        // ~/.config/user-dirs.dirs says where "Documents" is in the person's language.
+        let base = std::env::var_os("XDG_CONFIG_HOME").map(PathBuf::from).unwrap_or_else(|| home.join(".config"));
+        if let Ok(text) = std::fs::read_to_string(base.join("user-dirs.dirs")) {
+            for line in text.lines() {
+                if let Some(v) = line.trim().strip_prefix("XDG_DOCUMENTS_DIR=") {
+                    let path = PathBuf::from(v.trim_matches('"').replace("$HOME", &home.to_string_lossy()));
+                    if path.is_dir() {
+                        return Some(path);
+                    }
+                }
+            }
+        }
+    }
+    let docs = home.join("Documents");
+    Some(if docs.is_dir() { docs } else { home })
+}
+
 /// Where settings are kept.
 pub fn config_dir() -> Option<PathBuf> {
     #[cfg(target_os = "windows")]

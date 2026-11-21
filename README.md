@@ -59,7 +59,14 @@ When the system already has `smartctl`, that one is used.
   left and, after a week of history, roughly how many years at the current writing pace.
 - **Disk self-tests**: start the short or extended self-test (Function → Disk self-test…), follow
   its progress and see earlier results.
-- **Desktop alerts** when a disk gets worse or reaches its temperature alarm (Function menu).
+- **Desktop alerts** when a disk gets worse or reaches its temperature alarm (Function menu),
+  with an **alert history** window. A background thread keeps reading the disks, recording the
+  history and sending alerts even when the window is minimised or hidden.
+- **Start with the system** (File menu): starts minimised when you log in, so the history keeps
+  growing and alerts keep coming without opening the window.
+- **Save the report** as a text file or the window as a picture (Edit menu; saved in Documents).
+- **View menu**: interface size (80–200 %), hide serial numbers and the S.M.A.R.T. table (handy for
+  screenshots), S.M.A.R.T. names always in English, hide disks without S.M.A.R.T.
 - **Live activity**: current read and write speed of the disk shown.
 - **Extended facts** (`smartctl -x`): lifetime min/max temperatures, NVMe sensors and thresholds,
   power states, write cache, SATA link errors, device statistics, error logs.

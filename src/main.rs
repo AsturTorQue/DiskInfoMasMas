@@ -4,9 +4,11 @@
 mod demo;
 mod disks;
 mod alerts;
+mod autostart;
 mod cli;
 mod health;
 mod history;
+mod monitor;
 mod parts;
 mod i18n;
 #[cfg(target_os = "linux")]
@@ -42,6 +44,18 @@ struct Settings {
     menu_entry: bool,
     /// Desktop notifications when a disk gets worse or too hot.
     alerts: bool,
+    /// Show serial numbers as asterisks (handy for screenshots).
+    hide_serial: bool,
+    /// Hide the S.M.A.R.T. attribute table.
+    hide_smart: bool,
+    /// Attribute names always in English, whatever the interface language.
+    smart_english: bool,
+    /// Leave out disks that give no S.M.A.R.T. data (when some disk does).
+    hide_no_smart: bool,
+    /// Size of the interface, in percent.
+    zoom: u32,
+    /// Start when the person logs in (minimised).
+    autostart: bool,
 }
 
 impl Default for Settings {
@@ -55,6 +69,12 @@ impl Default for Settings {
             thresholds: HashMap::new(),
             menu_entry: true,
             alerts: true,
+            hide_serial: false,
+            hide_smart: false,
+            smart_english: false,
+            hide_no_smart: false,
+            zoom: 100,
+            autostart: false,
         }
     }
 }
@@ -103,11 +123,16 @@ struct App {
     needs_admin: bool,
     direct_ok: bool,
     message: Option<&'static str>,
-    last_refresh: Instant,
     show_thresholds: bool,
     edit_th: Thresholds,
     show_about: bool,
-    toast: Option<(&'static str, Instant)>,
+    toast: Option<(String, Instant)>,
+    /// A picture of the window being saved: waits a moment so the menu has closed.
+    save_image: Option<ImageJob>,
+    /// `--minimized`: minimise the window on the first frame (started at login).
+    minimize_first: bool,
+    /// `--try-save`: save the report as text and picture, then quit (to check saving works).
+    try_save: Option<u32>,
     applied_theme: Option<Theme>,
     /// The passwordless rule let us read S.M.A.R.T. on the last scan.
     passwordless: bool,
@@ -119,9 +144,10 @@ struct App {
     shot: Option<Shot>,
     /// Screenshot and demo runs: no history saved, no notifications.
     quiet: bool,
-    history: history::History,
+    /// Shared with the background monitor: history, alert log, what it read last.
+    core: monitor::Shared,
+    show_alerts: bool,
     speeds: speed::Speeds,
-    watcher: alerts::Watcher,
     /// Which line the History tab draws.
     metric: Metric,
     show_selftest: bool,
@@ -158,6 +184,7 @@ impl App {
         if let Some(th) = theme {
             settings.theme = th;
         }
+        let settings_for_core = settings.clone();
         let mut app = Self {
             disks: Vec::new(),
             selected: 0,
@@ -167,20 +194,30 @@ impl App {
             needs_admin: false,
             direct_ok: false,
             message: None,
-            last_refresh: Instant::now(),
             show_thresholds: false,
             edit_th: Thresholds::defaults(false),
             show_about: false,
             toast: None,
+            save_image: None,
+            try_save: None,
+            minimize_first: false,
             applied_theme: None,
             passwordless: false,
             show_pw: false,
             pw_task: None,
             tab: Tab::Smart,
             quiet: demo || shot.is_some(),
-            history: if demo || shot.is_some() { history::History::default() } else { history::History::load() },
+            core: {
+                let quiet = demo || shot.is_some();
+                let (hist, log) = if quiet {
+                    (history::History::default(), alerts::Log::default())
+                } else {
+                    (history::History::load(), alerts::Log::load())
+                };
+                monitor::new(settings_for_core.clone(), hist, log)
+            },
+            show_alerts: false,
             speeds: speed::start(),
-            watcher: alerts::Watcher::default(),
             metric: Metric::Temperature,
             show_selftest: false,
             selftest_task: None,
@@ -188,13 +225,21 @@ impl App {
         };
         if demo {
             app.apply_scan(demo::demo_scan(), false);
-            app.history = demo::demo_history(&app.disks);
+            {
+                let mut c = monitor::lock(&app.core);
+                c.history = demo::demo_history(&app.disks);
+                c.log = demo::demo_alerts(&app.disks);
+            }
         } else if app.shot.is_some() {
             // Read synchronously so the picture shows real disks.
             let r = disks::scan(false);
             app.apply_scan(r, false);
         } else {
             app.start_scan(false);
+        }
+        if !app.quiet {
+            // Keeps watching (history, alerts) even when the window is minimised or hidden.
+            monitor::start(app.core.clone());
         }
         app
     }
@@ -227,6 +272,10 @@ impl App {
             return;
         }
         self.disks = r.disks;
+        // Leave out disks without S.M.A.R.T. data, but only when at least one disk has it.
+        if self.settings.hide_no_smart && self.disks.iter().any(|d| d.smart_read) {
+            self.disks.retain(|d| d.smart_read);
+        }
         if !admin {
             self.direct_ok = self.disks.iter().any(|d| d.smart_read);
             self.passwordless = r.passwordless;
@@ -237,59 +286,25 @@ impl App {
             .and_then(|k| self.disks.iter().position(|d| d.dev == k))
             .unwrap_or(0);
         self.reevaluate();
-        self.last_refresh = Instant::now();
         self.after_reading();
     }
 
-    /// After every reading: keep history and announce disks that got worse or too hot.
-    /// Checks and demo runs (`quiet`) leave the person's history and desktop alone.
+    /// After every reading: hand the disks to the background monitor (it keeps the history and
+    /// announces disks that got worse or too hot). Checks and demo runs (`quiet`) are left out.
     fn after_reading(&mut self) {
         if self.quiet {
             return;
         }
-        let mut added = false;
-        for d in &self.disks {
-            added |= self.history.record(d);
-        }
-        if added {
-            self.history.save();
-        }
-        if !self.settings.alerts {
-            return;
-        }
-        let lang = self.settings.language;
-        for d in &self.disks {
-            let key = d.key();
-            if self.watcher.health_worse(&key, d.health) {
-                let body = format!("{} ({}): {}", d.model, d.place(), self.health_text(d));
-                alerts::notify(t(lang, "alert_health"), &body);
-            }
-            let th = self.settings.thresholds_for(d);
-            if self.watcher.too_hot(&key, d.temperature, th.alarm_temp) {
-                let body = format!("{} ({}): {}", d.model, d.place(), self.temp_text(d.temperature));
-                alerts::notify(t(lang, "alert_hot"), &body);
-            }
-        }
+        let mut c = monitor::lock(&self.core);
+        c.snapshot = self.disks.clone();
+        c.direct_ok = self.direct_ok;
+        c.observe(&self.disks);
     }
 
     fn reevaluate(&mut self) {
         for d in &mut self.disks {
             let th = self.settings.thresholds_for(d);
             health::evaluate(d, &th);
-        }
-    }
-
-    fn auto_refresh(&mut self) {
-        if self.direct_ok {
-            self.start_scan(false);
-        } else {
-            for d in &mut self.disks {
-                if let Some(t) = disks::hwmon_temp(&d.dev) {
-                    d.temperature = Some(t);
-                }
-            }
-            self.last_refresh = Instant::now();
-            self.after_reading();
         }
     }
 
@@ -362,7 +377,17 @@ impl App {
     }
 
     fn attr_name(&self, d: &Disk, a: &disks::Attr) -> String {
-        i18n::attr_name(self.settings.language, a.id, d.is_nvme, &a.name)
+        let lang = if self.settings.smart_english { Lang::En } else { self.settings.language };
+        i18n::attr_name(lang, a.id, d.is_nvme, &a.name)
+    }
+
+    /// The serial number, or asterisks when the person chose to hide it.
+    fn serial_text(&self, d: &Disk) -> String {
+        if self.settings.hide_serial && !d.serial.is_empty() {
+            "*".repeat(d.serial.chars().count().clamp(6, 16))
+        } else {
+            d.serial.clone()
+        }
     }
 
     fn report(&self) -> String {
@@ -375,7 +400,7 @@ impl App {
             let rows = [
                 (self.tr("model"), d.model.clone()),
                 (self.tr("firmware"), d.firmware.clone()),
-                (self.tr("serial"), d.serial.clone()),
+                (self.tr("serial"), self.serial_text(d)),
                 (self.tr("capacity"), self.size_text(d.size_bytes)),
                 (self.tr("interface"), d.interface.clone()),
                 (self.tr("standard"), d.standard.clone()),
@@ -414,7 +439,7 @@ impl App {
                     );
                 }
             }
-            if !d.attrs.is_empty() {
+            if !d.attrs.is_empty() && !self.settings.hide_smart {
                 out += "\n-- S.M.A.R.T. ---------------------------------------------------------\n";
                 out += &format!(
                     "ID {} | {} | {} | {} | {}\n",
@@ -520,6 +545,14 @@ fn right_label(ui: &mut egui::Ui, text: &str, help: &str) {
 
 impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        if self.minimize_first {
+            self.minimize_first = false;
+            ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
+        }
+        let zoom = self.settings.zoom.clamp(70, 250) as f32 / 100.0;
+        if (ctx.zoom_factor() - zoom).abs() > 0.001 {
+            ctx.set_zoom_factor(zoom);
+        }
         if self.applied_theme != Some(self.settings.theme) {
             ctx.set_visuals(self.pal().visuals());
             self.applied_theme = Some(self.settings.theme);
@@ -536,9 +569,27 @@ impl eframe::App for App {
                 ctx.request_repaint_after(Duration::from_millis(100));
             }
         }
-        let every = self.settings.auto_refresh_min;
-        if every > 0 && self.scanning.is_none() && self.last_refresh.elapsed() >= Duration::from_secs(every as u64 * 60) {
-            self.auto_refresh();
+        // Hand the settings to the background monitor and pick up what it read.
+        let pending = if self.quiet {
+            None
+        } else {
+            let mut c = monitor::lock(&self.core);
+            c.settings = self.settings.clone();
+            c.pending.take()
+        };
+        match pending {
+            Some(monitor::Pending::Scan(r)) if self.scanning.is_none() => self.apply_scan(r, false),
+            Some(monitor::Pending::Temps(temps)) => {
+                for (dev, temp) in temps {
+                    if let Some(d) = self.disks.iter_mut().find(|d| d.dev == dev) {
+                        d.temperature = Some(temp);
+                    }
+                }
+                if !self.quiet {
+                    monitor::lock(&self.core).snapshot = self.disks.clone();
+                }
+            }
+            _ => {}
         }
         // Once a second: live speed, and alerts keep working while the window is in the background.
         ctx.request_repaint_after(Duration::from_secs(1));
@@ -549,6 +600,15 @@ impl eframe::App for App {
         egui::TopBottomPanel::top("menu").show(ctx, |ui| {
             egui::menu::bar(ui, |ui| {
                 ui.menu_button(self.tr("menu_file"), |ui| {
+                    let label = self.tr("autostart_menu");
+                    if ui.checkbox(&mut self.settings.autostart, label).changed() {
+                        if autostart::set(self.settings.autostart) {
+                            self.settings.save();
+                        } else {
+                            self.settings.autostart = !self.settings.autostart;
+                            self.toast_key("save_failed");
+                        }
+                    }
                     #[cfg(target_os = "linux")]
                     {
                         let label = self.tr("menu_entry");
@@ -569,7 +629,15 @@ impl eframe::App for App {
                 ui.menu_button(self.tr("menu_edit"), |ui| {
                     if ui.button(self.tr("copy_report")).clicked() {
                         ctx.copy_text(self.report());
-                        self.toast = Some(("report_copied", Instant::now()));
+                        self.toast_key("report_copied");
+                        ui.close_menu();
+                    }
+                    if ui.button(self.tr("save_text")).clicked() {
+                        self.save_report_text();
+                        ui.close_menu();
+                    }
+                    if ui.button(self.tr("save_image")).clicked() {
+                        self.start_save_image();
                         ui.close_menu();
                     }
                 });
@@ -604,6 +672,10 @@ impl eframe::App for App {
                     if ui.checkbox(&mut self.settings.alerts, label).changed() {
                         self.settings.save();
                     }
+                    if ui.button(self.tr("alert_history_menu")).clicked() {
+                        self.show_alerts = true;
+                        ui.close_menu();
+                    }
                     if ui.button(self.tr("thresholds_menu")).clicked() {
                         if let Some(d) = self.disks.get(self.selected) {
                             self.edit_th = self.settings.thresholds_for(d);
@@ -626,6 +698,30 @@ impl eframe::App for App {
                         self.settings.save();
                     }
                     if ui.checkbox(&mut self.settings.fahrenheit, fahrenheit).changed() {
+                        self.settings.save();
+                    }
+                });
+                ui.menu_button(self.tr("menu_view"), |ui| {
+                    ui.menu_button(self.tr("v_zoom"), |ui| {
+                        for z in [80u32, 90, 100, 110, 125, 150, 175, 200] {
+                            if ui.radio(self.settings.zoom == z, format!("{z} %")).clicked() {
+                                self.settings.zoom = z;
+                                self.settings.save();
+                                ui.close_menu();
+                            }
+                        }
+                    });
+                    ui.separator();
+                    let labels = [self.tr("v_hide_serial"), self.tr("v_hide_smart"), self.tr("v_smart_english"), self.tr("v_hide_nosmart")];
+                    let mut changed = false;
+                    changed |= ui.checkbox(&mut self.settings.hide_serial, labels[0]).changed();
+                    changed |= ui.checkbox(&mut self.settings.hide_smart, labels[1]).changed();
+                    changed |= ui.checkbox(&mut self.settings.smart_english, labels[2]).changed();
+                    if ui.checkbox(&mut self.settings.hide_no_smart, labels[3]).changed() {
+                        changed = true;
+                        self.refresh();
+                    }
+                    if changed {
                         self.settings.save();
                     }
                 });
@@ -801,7 +897,7 @@ impl eframe::App for App {
                     };
                     let rows: [(Field, Field); 5] = [
                         (f("firmware", d.firmware.clone(), "h_firmware"), f("host_reads", opt(d.host_reads_gb, " GB"), "h_host_reads")),
-                        (f("serial", d.serial.clone(), "h_serial"), f("host_writes", opt(d.host_writes_gb, " GB"), "h_host_writes")),
+                        (f("serial", self.serial_text(&d), "h_serial"), f("host_writes", opt(d.host_writes_gb, " GB"), "h_host_writes")),
                         (f("interface", d.interface.clone(), "h_interface"), f("rotation", rotation, "h_rotation")),
                         (f("transfer_mode", d.transfer_mode.clone(), "h_transfer_mode"), f("power_on_count", opt(d.power_on_count, &times), "h_power_on_count")),
                         (
@@ -915,7 +1011,7 @@ impl eframe::App for App {
                 self.pw_task = None;
                 match res {
                     Ok(()) => {
-                        self.toast = Some((if enable { "msg_rule_on" } else { "msg_rule_off" }, Instant::now()));
+                        self.toast_key(if enable { "msg_rule_on" } else { "msg_rule_off" });
                         self.message = None;
                         self.start_scan(false);
                     }
@@ -972,7 +1068,7 @@ impl eframe::App for App {
                 self.selftest_task = None;
                 match res {
                     Ok(()) => {
-                        self.toast = Some(("msg_test_started", Instant::now()));
+                        self.toast_key("msg_test_started");
                         self.message = None;
                         self.refresh();
                     }
@@ -1061,6 +1157,60 @@ impl eframe::App for App {
             }
         }
 
+        if self.show_alerts {
+            let lang = self.settings.language;
+            let events = monitor::lock(&self.core).log.events.clone();
+            let mut clear = false;
+            let pal = self.pal();
+            // Text of each event, worked out before the window so it does not borrow `self`.
+            let rows: Vec<(String, String, String, Color32)> = events
+                .iter()
+                .rev()
+                .map(|e| {
+                    let (text, color) = match e.kind.as_str() {
+                        "health" => (
+                            format!("{}: {}", t(lang, "health_status"), t_dyn_status(lang, &e.value)),
+                            if e.value == "bad" { pal.bad } else { pal.caution },
+                        ),
+                        _ => (format!("{}: {}", t(lang, "alert_hot_short"), self.temp_text(e.value.parse().ok())), pal.bad),
+                    };
+                    (date_time_text(e.t), e.disk.clone(), text, color)
+                })
+                .collect();
+            let mut open = true;
+            egui::Window::new(t(lang, "alert_history_title"))
+                .open(&mut open)
+                .resizable(true)
+                .collapsible(false)
+                .default_width(520.0)
+                .show(ctx, |ui| {
+                    if rows.is_empty() {
+                        ui.label(RichText::new(t(lang, "alert_history_empty")).italics().color(pal.muted));
+                    } else {
+                        egui::ScrollArea::vertical().max_height(320.0).show(ui, |ui| {
+                            egui::Grid::new("alert_log").striped(true).num_columns(3).spacing([14.0, 3.0]).show(ui, |ui| {
+                                for (when, disk, text, color) in &rows {
+                                    ui.label(when);
+                                    ui.label(disk);
+                                    ui.label(RichText::new(text).color(*color));
+                                    ui.end_row();
+                                }
+                            });
+                        });
+                        ui.add_space(6.0);
+                        if ui.button(t(lang, "alert_history_clear")).clicked() {
+                            clear = true;
+                        }
+                    }
+                });
+            self.show_alerts = open;
+            if clear {
+                let mut c = monitor::lock(&self.core);
+                c.log.events.clear();
+                c.log.save();
+            }
+        }
+
         if self.show_about {
             let lang = self.settings.language;
             egui::Window::new(t(lang, "about")).open(&mut self.show_about).resizable(false).collapsible(false).show(ctx, |ui| {
@@ -1074,11 +1224,10 @@ impl eframe::App for App {
             });
         }
 
-        if let Some((key, at)) = self.toast {
-            if at.elapsed() < Duration::from_secs(3) {
-                let text = self.tr(key);
+        if let Some((text, at)) = self.toast.clone().filter(|_| self.save_image.is_none()) {
+            if at.elapsed() < Duration::from_secs(if text.contains('/') || text.contains('\\') { 6 } else { 3 }) {
                 egui::Area::new("toast".into()).anchor(egui::Align2::CENTER_BOTTOM, [0.0, -16.0]).show(ctx, |ui| {
-                    egui::Frame::popup(ui.style()).show(ui, |ui| ui.label(text));
+                    egui::Frame::popup(ui.style()).show(ui, |ui| ui.label(text.as_str()));
                 });
                 ctx.request_repaint_after(Duration::from_millis(200));
             } else {
@@ -1086,6 +1235,18 @@ impl eframe::App for App {
             }
         }
 
+        self.save_image_step(ctx);
+        if let Some(n) = self.try_save {
+            self.try_save = Some(n + 1);
+            ctx.request_repaint();
+            if n == 20 {
+                self.save_report_text();
+                self.start_save_image();
+            } else if n > 20 && self.save_image.is_none() {
+                println!("{}", self.toast.as_ref().map(|t| t.0.as_str()).unwrap_or("no toast"));
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            }
+        }
         self.screenshot_step(ctx);
     }
 }
@@ -1140,6 +1301,10 @@ impl App {
     }
 
     fn smart_table(&self, ui: &mut egui::Ui, d: &Disk, pal: &Palette) {
+        if self.settings.hide_smart {
+            ui.label(RichText::new(self.tr("smart_hidden")).italics().color(pal.muted));
+            return;
+        }
         egui::Grid::new("attrs").striped(true).num_columns(7).spacing([10.0, 2.0]).min_row_height(ROW).show(ui, |ui| {
             for (h, help) in [
                 ("", ""),
@@ -1365,7 +1530,7 @@ impl App {
         grid(ui, "details", rows);
 
         // SSD life estimate.
-        if let Some(e) = history::estimate(d, self.history.samples(d)) {
+        if let Some(e) = history::estimate(d, &self.samples_of(d)) {
             ui.add_space(8.0);
             ui.label(RichText::new(self.tr("est_title")).strong().size(15.0)).on_hover_text(self.tr("h_estimate"));
             let tb = |v: f64| self.decimal(format!("{v:.1} TB"));
@@ -1408,6 +1573,11 @@ impl App {
             ui.label(RichText::new(self.tr(group)).strong().size(15.0));
             grid(ui, group, rows);
         }
+    }
+
+    /// The recorded readings of a disk (a copy, so the monitor thread is not kept waiting).
+    fn samples_of(&self, d: &Disk) -> Vec<history::Sample> {
+        monitor::lock(&self.core).history.samples(d).to_vec()
     }
 
     /// "x_sensor:2" → "Sensor 2"; other "x_" names are text keys; anything else is shown as is.
@@ -1473,7 +1643,7 @@ impl App {
                 }
             }
         });
-        let samples = self.history.samples(d);
+        let samples = self.samples_of(d);
         let points: Vec<(u64, f64)> = samples
             .iter()
             .filter_map(|s| {
@@ -1562,6 +1732,64 @@ impl App {
         );
     }
 
+    fn toast_key(&mut self, key: &'static str) {
+        self.toast = Some((self.tr(key).to_string(), Instant::now()));
+    }
+
+    /// File name like DiskInfo-2026-11-20-1935.<ext> in the person's Documents folder.
+    fn report_path(&self, ext: &str) -> Option<PathBuf> {
+        let (y, m, d, h, min) = civil(history::now());
+        Some(platform::documents_dir()?.join(format!("DiskInfo-{y}-{m:02}-{d:02}-{h:02}{min:02}.{ext}")))
+    }
+
+    fn save_report_text(&mut self) {
+        let text = self.report();
+        match self.report_path("txt") {
+            Some(path) if std::fs::write(&path, text).is_ok() => {
+                self.toast = Some((format!("{} {}", self.tr("saved"), path.display()), Instant::now()));
+            }
+            _ => self.toast_key("save_failed"),
+        }
+    }
+
+    fn start_save_image(&mut self) {
+        if let Some(path) = self.report_path("png") {
+            self.toast = None;
+            self.save_image = Some(ImageJob { path, at: Instant::now(), requested: false });
+        } else {
+            self.toast_key("save_failed");
+        }
+    }
+
+    /// Takes the window picture once the menu has closed, and saves it.
+    fn save_image_step(&mut self, ctx: &egui::Context) {
+        let Some(job) = &mut self.save_image else { return };
+        if !job.requested {
+            if job.at.elapsed() < Duration::from_millis(300) {
+                ctx.request_repaint_after(Duration::from_millis(100));
+                return;
+            }
+            job.requested = true;
+            ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(Default::default()));
+        }
+        let image = ctx.input(|i| {
+            i.raw.events.iter().find_map(|e| match e {
+                egui::Event::Screenshot { image, .. } => Some(image.clone()),
+                _ => None,
+            })
+        });
+        if let Some(img) = image {
+            let path = job.path.clone();
+            self.save_image = None;
+            match save_png(&path, &img) {
+                Ok(()) => self.toast = Some((format!("{} {}", self.tr("saved"), path.display()), Instant::now())),
+                Err(_) => self.toast_key("save_failed"),
+            }
+        } else {
+            ctx.request_repaint();
+        }
+    }
+
     fn screenshot_step(&mut self, ctx: &egui::Context) {
         let Some(shot) = &mut self.shot else { return };
         ctx.request_repaint();
@@ -1577,17 +1805,33 @@ impl App {
             })
         });
         if let Some(img) = image {
-            let [w, h] = img.size;
-            let bytes: Vec<u8> = img.pixels.iter().flat_map(|c| c.to_array()).collect();
             if let Some(dir) = shot.path.parent() {
                 let _ = std::fs::create_dir_all(dir);
             }
-            if let Err(e) = image::save_buffer(&shot.path, &bytes, w as u32, h as u32, image::ColorType::Rgba8) {
+            if let Err(e) = save_png(&shot.path, &img) {
                 eprintln!("screenshot not saved: {e}");
             }
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
         }
     }
+}
+
+/// "caution" → "Precaución" and so on, in the interface language.
+fn t_dyn_status(lang: Lang, key: &str) -> &'static str {
+    i18n::t_dyn(lang, key)
+}
+
+/// A window picture being saved (see `App::save_image_step`).
+struct ImageJob {
+    path: PathBuf,
+    at: Instant,
+    requested: bool,
+}
+
+fn save_png(path: &std::path::Path, img: &egui::ColorImage) -> Result<(), String> {
+    let [w, h] = img.size;
+    let bytes: Vec<u8> = img.pixels.iter().flat_map(|c| c.to_array()).collect();
+    image::save_buffer(path, &bytes, w as u32, h as u32, image::ColorType::Rgba8).map_err(|e| e.to_string())
 }
 
 /// (year, month, day, hour, minute) in UTC from seconds since 1970 (civil-from-days algorithm).
@@ -1639,7 +1883,14 @@ fn main() -> eframe::Result<()> {
     // --demo shows two sample disks with S.M.A.R.T. data (for checking the layout).
     let demo = args.iter().any(|a| a == "--demo");
     let tab = arg_value(&args, "--tab");
+    let try_save = args.iter().any(|a| a == "--try-save");
+    let open_window = arg_value(&args, "--open");
     let disk: Option<usize> = arg_value(&args, "--disk").and_then(|v| v.parse().ok());
+    // Keep the login entry pointing at this program (an AppImage may have moved).
+    if shot.is_none() && !demo && Settings::load().autostart {
+        autostart::set(true);
+    }
+    let minimized = args.iter().any(|a| a == "--minimized");
     // Keep the application-menu entry current (it gives the window its icon on Wayland).
     // Checks (--screenshot) and --demo runs leave the user's files alone.
     #[cfg(target_os = "linux")]
@@ -1690,6 +1941,14 @@ fn main() -> eframe::Result<()> {
         options,
         Box::new(move |_cc| {
             let mut app = App::new(shot, lang, theme, demo);
+            if try_save {
+                app.try_save = Some(0);
+            }
+            app.minimize_first = minimized && !app.quiet;
+            // --open alerts opens the alert history at start (handy for checking the layout).
+            if open_window.as_deref() == Some("alerts") {
+                app.show_alerts = true;
+            }
             // --disk N shows the Nth disk first (counting from 1).
             if let Some(n) = disk.and_then(|n| n.checked_sub(1)) {
                 app.selected = n.min(app.disks.len().saturating_sub(1));

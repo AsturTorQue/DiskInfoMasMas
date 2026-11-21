@@ -31,7 +31,7 @@ fn program_path() -> Option<PathBuf> {
 }
 
 /// Quotes a path for the Exec line of a .desktop file.
-fn exec_quote(p: &str) -> String {
+pub fn exec_quote(p: &str) -> String {
     let mut s = String::from("\"");
     for c in p.chars() {
         if matches!(c, '"' | '`' | '$' | '\\') {

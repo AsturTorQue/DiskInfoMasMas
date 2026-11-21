@@ -134,3 +134,14 @@ pub fn demo_history(disks: &[Disk]) -> crate::history::History {
     }
     h
 }
+
+/// A few made-up alerts for the sample disks, so the alert history has something to show.
+pub fn demo_alerts(disks: &[Disk]) -> crate::alerts::Log {
+    let now = crate::history::now();
+    let mut log = crate::alerts::Log::default();
+    let label = |i: usize| disks.get(i).map(|d| format!("{} ({})", d.model, d.place())).unwrap_or_default();
+    log.push(crate::alerts::Event { t: now - 19 * 86_400, kind: "health".into(), disk: label(0), value: "caution".into() });
+    log.push(crate::alerts::Event { t: now - 9 * 86_400, kind: "hot".into(), disk: label(1), value: "62".into() });
+    log.push(crate::alerts::Event { t: now - 2 * 86_400, kind: "hot".into(), disk: label(0), value: "51".into() });
+    log
+}

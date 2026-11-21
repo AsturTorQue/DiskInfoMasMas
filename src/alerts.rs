@@ -3,7 +3,64 @@
 //! `display notification` via osascript (macOS).
 
 use crate::disks::Status;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+
+/// Oldest events are dropped beyond this many.
+const MAX_EVENTS: usize = 500;
+
+/// One thing that was announced: a disk got worse or reached its temperature alarm.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Event {
+    /// Seconds since 1970 (UTC).
+    pub t: u64,
+    /// "health" or "hot".
+    pub kind: String,
+    /// "Model (device)".
+    pub disk: String,
+    /// For "health": the new status key ("caution", "bad"); for "hot": the temperature in °C.
+    pub value: String,
+}
+
+/// The history of alerts, kept on this computer next to the settings.
+#[derive(Default, Serialize, Deserialize)]
+pub struct Log {
+    pub events: Vec<Event>,
+}
+
+impl Log {
+    fn path() -> Option<std::path::PathBuf> {
+        Some(crate::platform::config_dir()?.join("alerts.json"))
+    }
+
+    pub fn load() -> Self {
+        Self::path()
+            .and_then(|p| std::fs::read_to_string(p).ok())
+            .and_then(|t| serde_json::from_str(&t).ok())
+            .unwrap_or_default()
+    }
+
+    pub fn save(&self) {
+        let Some(p) = Self::path() else { return };
+        if let Some(dir) = p.parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        if let Ok(t) = serde_json::to_string(self) {
+            let tmp = p.with_extension("json.tmp");
+            if std::fs::write(&tmp, t).is_ok() {
+                let _ = std::fs::rename(tmp, p);
+            }
+        }
+    }
+
+    pub fn push(&mut self, e: Event) {
+        self.events.push(e);
+        if self.events.len() > MAX_EVENTS {
+            let extra = self.events.len() - MAX_EVENTS;
+            self.events.drain(..extra);
+        }
+    }
+}
 
 /// Remembers what was last seen per disk, so each change is announced once.
 #[derive(Default)]
