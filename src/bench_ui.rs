@@ -152,6 +152,22 @@ pub(crate) const WHOLE: &str = " [w]";
 /// Mounts a partition the way a file manager does (no administrator needed on most desktops);
 /// returns the folder it was mounted at.
 pub(crate) fn mount_device(dev: &Path) -> Result<PathBuf, String> {
+    // macOS: diskutil mounts it, then says where.
+    #[cfg(target_os = "macos")]
+    {
+        let out = std::process::Command::new("diskutil").arg("mount").arg(dev).output().map_err(|e| format!("diskutil: {e}"))?;
+        if !out.status.success() {
+            return Err(format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr)).trim().to_string());
+        }
+        let info = std::process::Command::new("diskutil").args(["info", "-plist"]).arg(dev).output().map_err(|e| e.to_string())?;
+        let at = plist::Value::from_reader_xml(&info.stdout[..])
+            .ok()
+            .and_then(|v| v.into_dictionary())
+            .and_then(|d| d.get("MountPoint").and_then(|m| m.as_string().map(str::to_string)))
+            .unwrap_or_default();
+        return if !at.is_empty() && Path::new(&at).is_dir() { Ok(PathBuf::from(at)) } else { Err("mounted, but no folder was given".into()) };
+    }
+    #[allow(unreachable_code)]
     let out = std::process::Command::new("udisksctl").args(["mount", "-b"]).arg(dev).output().map_err(|e| format!("udisksctl: {e}"))?;
     let text = format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
     // "Mounted /dev/sdb1 at /run/media/ana/USB." or "... already mounted at `/run/media/ana/USB'."
@@ -224,7 +240,7 @@ impl App {
             add(c.clone(), c.display().to_string(), &mut out);
         }
         // Partitions that are not mounted (a USB stick just plugged in): offered with a Mount button.
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
         for d in self.pick_disks() {
             for p in &d.partitions {
                 let fs = p.fs.as_str();
@@ -237,7 +253,7 @@ impl App {
             }
         }
         // Every whole drive, for the quick fake-drive test.
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
         for d in self.pick_disks() {
             if !d.dev.is_empty() && !d.partitions.is_empty() {
                 out.push((PathBuf::from(format!("/dev/{}", d.dev)), format!("/dev/{} — {}{WHOLE}", d.dev, d.model)));

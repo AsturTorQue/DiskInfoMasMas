@@ -10,7 +10,7 @@
 
 use crate::fakecheck::{self, BadBlock, BlockKind, Config, Handle, Phase, Shared, State, BLOCK};
 use serde_json::Value;
-use std::io::{self, BufRead};
+use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -25,13 +25,57 @@ fn update(state: &Shared, f: impl FnOnce(&mut State)) {
 
 /// Whether any partition of the drive (or the drive) is mounted.
 fn mounted(dev: &str) -> bool {
-    std::fs::read_to_string("/proc/mounts")
-        .map(|t| t.lines().any(|l| l.split_whitespace().next().is_some_and(|d| d.starts_with(dev))))
-        .unwrap_or(false)
+    #[cfg(target_os = "linux")]
+    let text = std::fs::read_to_string("/proc/mounts").unwrap_or_default();
+    // macOS: `mount` lists "/dev/disk4s1 on /Volumes/USB (...)".
+    #[cfg(target_os = "macos")]
+    let text = std::process::Command::new("/sbin/mount").output().map(|o| String::from_utf8_lossy(&o.stdout).into_owned()).unwrap_or_default();
+    text.lines().any(|l| {
+        l.split_whitespace().next().is_some_and(|d| {
+            // "/dev/disk4" must not match "/dev/disk40".
+            d.strip_prefix(dev).is_some_and(|rest| rest.is_empty() || !rest.starts_with(|c: char| c.is_ascii_digit()) || cfg!(target_os = "linux"))
+        })
+    })
+}
+
+/// Opens the drive for reading and writing past the system's cache.
+fn open_drive(dev: &str) -> io::Result<std::fs::File> {
+    use std::os::unix::fs::OpenOptionsExt;
+    #[cfg(target_os = "linux")]
+    {
+        std::fs::OpenOptions::new().read(true).write(true).custom_flags(libc::O_DIRECT | libc::O_SYNC).open(dev)
+    }
+    #[cfg(target_os = "macos")]
+    {
+        use std::os::fd::AsRawFd;
+        // The "raw" twin of a disk (/dev/rdisk4) reads and writes the drive directly.
+        let raw = if Path::new(dev).exists() { dev.replacen("/dev/disk", "/dev/rdisk", 1) } else { dev.to_string() };
+        let path = if Path::new(&raw).exists() { raw } else { dev.to_string() };
+        let f = std::fs::OpenOptions::new().read(true).write(true).custom_flags(libc::O_SYNC).open(path)?;
+        // SAFETY: a valid descriptor; F_NOCACHE only turns caching off for it.
+        unsafe {
+            libc::fcntl(f.as_raw_fd(), libc::F_NOCACHE, 1);
+        }
+        Ok(f)
+    }
 }
 
 fn size_of(f: &std::fs::File) -> io::Result<u64> {
     use std::os::fd::AsRawFd;
+    #[cfg(target_os = "macos")]
+    {
+        // A disk device does not say its size through lseek: ask it (block size × block count).
+        const DKIOCGETBLOCKSIZE: libc::c_ulong = 0x4004_6418;
+        const DKIOCGETBLOCKCOUNT: libc::c_ulong = 0x4008_6419;
+        let (mut bs, mut count): (u32, u64) = (0, 0);
+        // SAFETY: valid descriptor and out-pointers of the sizes these requests write.
+        let ok = unsafe {
+            libc::ioctl(f.as_raw_fd(), DKIOCGETBLOCKSIZE, &mut bs) == 0 && libc::ioctl(f.as_raw_fd(), DKIOCGETBLOCKCOUNT, &mut count) == 0
+        };
+        if ok && bs > 0 && count > 0 {
+            return Ok(bs as u64 * count);
+        }
+    }
     // SAFETY: a valid descriptor; lseek only moves its offset.
     let n = unsafe { libc::lseek(f.as_raw_fd(), 0, libc::SEEK_END) };
     if n < 0 {
@@ -43,11 +87,10 @@ fn size_of(f: &std::fs::File) -> io::Result<u64> {
 
 /// The whole test on `dev` (runs as root). Returns false when cancelled.
 fn core(dev: &str, state: &Shared, cancel: &AtomicBool) -> io::Result<bool> {
-    use std::os::unix::fs::OpenOptionsExt;
     if mounted(dev) {
         return Err(io::Error::other("the drive is mounted"));
     }
-    let file = std::fs::OpenOptions::new().read(true).write(true).custom_flags(libc::O_DIRECT | libc::O_SYNC).open(dev)?;
+    let file = open_drive(dev)?;
     let size = size_of(&file)?;
     let cfg = Config { dir: PathBuf::new(), bytes: size / BLOCK as u64 * BLOCK as u64, quick: true };
     let plan = fakecheck::plan(&cfg);
@@ -182,6 +225,18 @@ pub fn helper_main(args: &[String]) -> i32 {
         return 2;
     }
     let cancel_file = args.iter().position(|a| a == "--cancel-file").and_then(|i| args.get(i + 1)).cloned();
+    // macOS asks for the password through a call that only answers at the end: the state goes
+    // to this file too, for the window to read as the test runs.
+    let state_file = args.iter().position(|a| a == "--state-file").and_then(|i| args.get(i + 1)).map(PathBuf::from);
+    let report = move |line: &str| {
+        println!("{PREFIX}{line}");
+        if let Some(f) = &state_file {
+            let tmp = f.with_extension("tmp");
+            if std::fs::write(&tmp, line).is_ok() {
+                let _ = std::fs::rename(&tmp, f);
+            }
+        }
+    };
     let state: Shared = Arc::new(Mutex::new(State::new(&Config { dir: PathBuf::new(), bytes: 0, quick: true })));
     // Already "writing": a first line saying "idle" would look like a finished test to the window.
     update(&state, |s| s.phase = Phase::Writing);
@@ -189,14 +244,14 @@ pub fn helper_main(args: &[String]) -> i32 {
     let done = Arc::new(AtomicBool::new(false));
     // Watches for the cancel file and reports the state.
     let watcher = {
-        let (state, cancel, done) = (state.clone(), cancel.clone(), done.clone());
+        let (state, cancel, done, report) = (state.clone(), cancel.clone(), done.clone(), report.clone());
         std::thread::spawn(move || {
             while !done.load(Ordering::Relaxed) {
                 if cancel_file.as_deref().is_some_and(|f| Path::new(f).exists()) {
                     cancel.store(true, Ordering::Relaxed);
                 }
                 let line = serde_json::to_string(&*state.lock().unwrap_or_else(|e| e.into_inner())).unwrap_or_default();
-                println!("{PREFIX}{line}");
+                report(&line);
                 std::thread::sleep(std::time::Duration::from_millis(250));
             }
         })
@@ -207,7 +262,7 @@ pub fn helper_main(args: &[String]) -> i32 {
     done.store(true, Ordering::Relaxed);
     let _ = watcher.join();
     let line = serde_json::to_string(&*state.lock().unwrap_or_else(|e| e.into_inner())).unwrap_or_default();
-    println!("{PREFIX}{line}");
+    report(&line);
     i32::from(failed)
 }
 
@@ -218,6 +273,7 @@ fn shell_quote(s: &str) -> String {
 }
 
 /// Copies this program where root can read it (the AppImage's own mount is private to the user).
+#[cfg(target_os = "linux")]
 fn stage_self() -> Option<(String, String)> {
     use std::os::unix::fs::PermissionsExt;
     let bytes = std::fs::read(std::env::current_exe().ok()?).ok()?;
@@ -232,7 +288,73 @@ fn stage_self() -> Option<(String, String)> {
     Some((dst.to_string_lossy().into_owned(), hash))
 }
 
+/// macOS: the helper is this same program (inside the app, where root can read it), started with
+/// the administrator password through osascript. Its progress is read from a state file.
+#[cfg(target_os = "macos")]
 fn run_as_root(dev: &str, state: &Shared, cancel: &Arc<AtomicBool>) -> Result<(), String> {
+    let valid = dev.strip_prefix("/dev/").is_some_and(|n| !n.is_empty() && n.chars().all(|c| c.is_ascii_alphanumeric()));
+    if !valid {
+        return Err("not a drive".into());
+    }
+    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+    let dir = crate::platform::data_dir().ok_or("no data folder")?;
+    let _ = std::fs::create_dir_all(&dir);
+    let (cancel_file, state_file) = (dir.join("raw-cancel"), dir.join("raw-state.json"));
+    let _ = std::fs::remove_file(&cancel_file);
+    let _ = std::fs::remove_file(&state_file);
+    let cmd = format!(
+        "{} rawcheck {} --cancel-file {} --state-file {} > /dev/null 2>&1",
+        shell_quote(&exe.to_string_lossy()),
+        shell_quote(dev),
+        shell_quote(&cancel_file.to_string_lossy()),
+        shell_quote(&state_file.to_string_lossy()),
+    );
+    let apple = format!("do shell script \"{}\" with administrator privileges", cmd.replace('\\', "\\\\").replace('"', "\\\""));
+    let mut child = std::process::Command::new("osascript")
+        .args(["-e", &apple])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("osascript: {e}"))?;
+    let mut last: Option<State> = None;
+    let status = loop {
+        if cancel.load(Ordering::Relaxed) {
+            let _ = std::fs::write(&cancel_file, b"stop");
+        }
+        if let Ok(text) = std::fs::read_to_string(&state_file) {
+            if let Ok(s) = serde_json::from_str::<State>(&text) {
+                update(state, |cur| *cur = s.clone());
+                last = Some(s);
+            }
+        }
+        if let Some(st) = child.try_wait().map_err(|e| e.to_string())? {
+            break st;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(250));
+    };
+    // One last read: the helper writes its final state just before it ends.
+    if let Ok(s) = std::fs::read_to_string(&state_file).map_err(|_| ()).and_then(|t| serde_json::from_str::<State>(&t).map_err(|_| ())) {
+        update(state, |cur| *cur = s.clone());
+        last = Some(s);
+    }
+    let mut err_text = String::new();
+    if let Some(mut e) = child.stderr.take() {
+        use std::io::Read;
+        let _ = e.read_to_string(&mut err_text);
+    }
+    let _ = std::fs::remove_file(&cancel_file);
+    let _ = std::fs::remove_file(&state_file);
+    match last {
+        Some(s) if !s.running() => Ok(()),
+        // osascript says "User canceled. (-128)" when the password window is closed.
+        _ if err_text.contains("-128") => Err("administrator rights were not granted".into()),
+        _ => Err(format!("the test stopped before it finished (code {}) {}", status.code().map_or("?".into(), |c| c.to_string()), err_text.trim())),
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn run_as_root(dev: &str, state: &Shared, cancel: &Arc<AtomicBool>) -> Result<(), String> {
+    use std::io::BufRead;
     use std::process::{Command, Stdio};
     let valid = dev.strip_prefix("/dev/").is_some_and(|n| !n.is_empty() && n.chars().all(|c| c.is_ascii_alphanumeric()));
     if !valid {

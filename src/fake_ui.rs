@@ -63,7 +63,7 @@ impl App {
     /// not mounted) when the quick test may work on it directly (Linux): its device, its size and
     /// the partitions to unmount first. Never for a drive that holds the system or the home folder.
     pub(crate) fn raw_target(&self, dir: &Path) -> Option<(String, u64, Vec<String>)> {
-        if !cfg!(target_os = "linux") {
+        if !cfg!(any(target_os = "linux", target_os = "macos")) {
             return None;
         }
         // A folder chosen by hand is tested with files in it, like H2testw does.
@@ -360,7 +360,7 @@ impl App {
                 h.cancel.store(true, Ordering::Relaxed);
             }
         }
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
         if start && f.quick {
             if let Some((dev, size, unmount)) = raw {
                 start = false;
@@ -368,6 +368,16 @@ impl App {
                 f.free_at_start = size;
                 f.last = None;
                 // The drive must not be mounted while its spots are rewritten.
+                #[cfg(target_os = "macos")]
+                let failed = {
+                    let _ = &unmount;
+                    match std::process::Command::new("diskutil").args(["unmountDisk", &dev]).output() {
+                        Ok(o) if o.status.success() => None,
+                        Ok(o) => Some(format!("{}{}", String::from_utf8_lossy(&o.stdout), String::from_utf8_lossy(&o.stderr)).trim().to_string()),
+                        Err(e) => Some(e.to_string()),
+                    }
+                };
+                #[cfg(target_os = "linux")]
                 let failed = unmount.iter().find_map(|p| {
                     let out = std::process::Command::new("udisksctl").args(["unmount", "-b", p]).output();
                     match out {

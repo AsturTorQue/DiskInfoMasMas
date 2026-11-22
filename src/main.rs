@@ -11,7 +11,7 @@ mod drive_picker;
 mod summary;
 mod fake_ui;
 mod fakecheck;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 mod rawcheck;
 mod cli;
 mod health;
@@ -2180,7 +2180,7 @@ fn main() -> eframe::Result<()> {
     }
     // `diskinfo list`, `diskinfo health`... run in the terminal without opening a window.
     // The quick fake-drive test runs a copy of this program as root (see rawcheck.rs).
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     if args.get(1).map(String::as_str) == Some("rawcheck") {
         std::process::exit(rawcheck::helper_main(&args));
     }
