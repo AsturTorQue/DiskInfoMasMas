@@ -8,6 +8,7 @@ mod autostart;
 mod bench;
 mod bench_ui;
 mod drive_picker;
+mod summary;
 mod fake_ui;
 mod fakecheck;
 #[cfg(target_os = "linux")]
@@ -1046,6 +1047,7 @@ impl eframe::App for App {
 
             let hours = format!(" {}", self.tr("unit_hours"));
             let times = format!(" {}", self.tr("unit_times"));
+            let mut summary_action = None;
             ui.horizontal_top(|ui| {
                 ui.vertical(|ui| {
                     ui.set_width(130.0);
@@ -1075,7 +1077,10 @@ impl eframe::App for App {
                     status_box(ui, Vec2::new(128.0, 46.0), f, fg, &[(self.temp_text(d.temperature), 20.0)], &temp_tip);
                 });
                 ui.add_space(8.0);
-                let w = ((ui.available_width() - 340.0) / 2.0).max(90.0);
+                // With room to spare, a summary card fills the right-hand side.
+                let avail = ui.available_width();
+                let with_card = avail >= 820.0;
+                let w = if with_card { ((avail - 360.0) * 0.45).clamp(160.0, 380.0) } else { ((avail - 340.0) / 2.0).max(90.0) };
                 egui::Grid::new("info").num_columns(4).spacing([6.0, 4.0]).show(ui, |ui| {
                     let rotation = d
                         .rotation_rpm
@@ -1106,7 +1111,19 @@ impl eframe::App for App {
                         ui.end_row();
                     }
                 });
+                if with_card && ui.available_width() >= 220.0 {
+                    ui.add_space(12.0);
+                    ui.vertical(|ui| {
+                        ui.set_width(ui.available_width() - 8.0);
+                        summary_action = self.summary_panel(ui, &d, &pal);
+                    });
+                }
             });
+            match summary_action {
+                Some(summary::SummaryAction::Speed) => self.bench_open(),
+                Some(summary::SummaryAction::Fake) => self.fake_open(),
+                None => {}
+            }
             for (k, v, h) in [
                 (self.tr("standard"), d.standard.clone(), self.tr("h_standard")),
                 (self.tr("features"), d.features.join(", "), self.tr("h_features")),
