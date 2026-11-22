@@ -132,7 +132,14 @@ impl App {
         let mut mounted: Option<PathBuf> = None;
         let mut open = true;
         let gb = |b: u64| self.decimal(format!("{:.2}", b as f64 / 1e9)) + " GB";
-        let raw = if f.quick { f.dirs.get(f.dir_idx).and_then(|d| self.raw_target(&d.0)) } else { None };
+        // The quick mode works on the whole drive directly. Where that is not possible (Windows and
+        // macOS for now, system disks, folders chosen by hand) files would have to fill the gaps,
+        // which is slower than the full test: then only the full test is offered.
+        let raw_possible = f.dirs.get(f.dir_idx).and_then(|d| self.raw_target(&d.0));
+        if raw_possible.is_none() && f.quick && !running {
+            f.quick = false;
+        }
+        let raw = if f.quick { raw_possible.clone() } else { None };
         let free_now: Option<u64> = f.dirs.get(f.dir_idx).and_then(|d| crate::platform::free_bytes(&d.0));
 
         egui::Window::new(t(lang, "fake_title").trim_end_matches('…'))
@@ -177,7 +184,9 @@ impl App {
                     egui::Grid::new("fake_cfg").num_columns(2).min_col_width(120.0).spacing([12.0, 6.0]).show(ui, |ui| {
                         ui.label(t(lang, "fake_mode"));
                         ui.vertical(|ui| {
-                            ui.selectable_value(&mut f.quick, true, t(lang, "fake_mode_quick"));
+                            ui.add_enabled_ui(raw_possible.is_some(), |ui| ui.selectable_value(&mut f.quick, true, t(lang, "fake_mode_quick")))
+                                .response
+                                .on_disabled_hover_text(t(lang, "fake_quick_unavailable"));
                             ui.selectable_value(&mut f.quick, false, t(lang, "fake_mode_full"));
                         });
                         ui.end_row();

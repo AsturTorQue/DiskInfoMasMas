@@ -1869,9 +1869,18 @@ impl App {
             items.push(self.tr("st_almost_full").to_string());
             warn = true;
         }
-        if !p.health.is_empty() && p.health != "Healthy" && p.health != "0" {
-            items.push(p.health.clone());
-            warn = true;
+        // Windows' own verdict on the volume (text or its number). "Unknown" (5) is what it says
+        // for file systems it cannot read, like ext4 or btrfs: that is not a problem of the disk.
+        match p.health.as_str() {
+            "Warning" | "1" => {
+                items.push(self.tr("st_win_warning").to_string());
+                warn = true;
+            }
+            "Unhealthy" | "2" => {
+                items.push(self.tr("st_win_unhealthy").to_string());
+                warn = true;
+            }
+            _ => {}
         }
         if items.is_empty() {
             (if p.mounts.is_empty() { "—".into() } else { "OK".into() }, false)

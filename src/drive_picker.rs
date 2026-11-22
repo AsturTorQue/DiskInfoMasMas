@@ -120,6 +120,8 @@ impl App {
                 ui.ctx().data_mut(|d| d.insert_temp(all_id, all));
             }
         });
+        // Partitions without a usable file system only when asked to show everything.
+        let show_none = mode != PickMode::Speed && all;
         // Removable drives first, then other drives, the system's own last.
         let mut disks: Vec<&Disk> = self.pick_disks().iter().collect();
         disks.sort_by_key(|d| (is_system_disk(d), !removable(d)));
@@ -141,6 +143,14 @@ impl App {
                             matched[i] = true;
                         }
                     }
+                    continue;
+                }
+                // Partitions this system cannot use (no file system it can read, like ext4 or btrfs
+                // on Windows) are left out; a disk with none left is not listed at all.
+                let usable = d.partitions.iter().any(|p| show_none || access_of(entry_of(p, dirs), dirs) != Access::None);
+                let whole_ok = mode == PickMode::FakeQuick
+                    && dirs.iter().any(|e| e.0 == Path::new(&format!("/dev/{}", d.dev)) && self.raw_target(&e.0).is_some());
+                if !usable && !whole_ok {
                     continue;
                 }
                 shown_any = true;
@@ -216,7 +226,7 @@ impl App {
                             matched[i] = true;
                         }
                         let access = access_of(entry, dirs);
-                        if access == Access::None && !all {
+                        if access == Access::None && !show_none {
                             continue; // no file system: nothing to test
                         }
                         if let Some(i) = entry {

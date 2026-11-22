@@ -123,8 +123,20 @@ fn system_mounts() -> Vec<(PathBuf, String)> {
 /// The person's home folder when it is inside `mount` and can be written to.
 fn home_inside(mount: &Path) -> Option<PathBuf> {
     let home = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")).map(PathBuf::from)?;
-    let (home, mount) = (home.canonicalize().ok()?, mount.canonicalize().ok()?);
+    let (home, mount) = (plain_path(home.canonicalize().ok()?), plain_path(mount.canonicalize().ok()?));
     (home.starts_with(&mount) && writable(&home)).then_some(home)
+}
+
+/// Windows writes resolved paths as `\\?\C:\Users\…`; people know them as `C:\Users\…`.
+pub(crate) fn plain_path(p: PathBuf) -> PathBuf {
+    let s = p.to_string_lossy();
+    if let Some(rest) = s.strip_prefix(r"\\?\UNC\") {
+        PathBuf::from(format!(r"\\{rest}"))
+    } else if let Some(rest) = s.strip_prefix(r"\\?\") {
+        PathBuf::from(rest)
+    } else {
+        p
+    }
 }
 
 /// True for a folder entry that cannot be tested in as it is: no write access, or a partition
@@ -171,6 +183,8 @@ impl App {
     pub(crate) fn bench_folders(&self) -> Vec<(PathBuf, String)> {
         let mut out: Vec<(PathBuf, String)> = Vec::new();
         let add = |dir: PathBuf, label: String, out: &mut Vec<(PathBuf, String)>| {
+            let dir = plain_path(dir);
+            let label = label.replace(r"\\?\", "");
             if !dir.is_dir() {
                 return;
             }
