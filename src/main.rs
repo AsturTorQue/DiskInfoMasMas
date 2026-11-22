@@ -978,8 +978,12 @@ impl eframe::App for App {
                 return;
             }
 
-            // Disk tabs.
-            egui::ScrollArea::horizontal().id_salt("tabs").show(ui, |ui| {
+            // Disk tabs, and on the right the tools that work on any drive (not only the one shown).
+            let mut tool = None;
+            ui.horizontal(|ui| {
+            let tools_w = if ui.available_width() >= 760.0 { 400.0 } else { 0.0 };
+            let tabs_w = ui.available_width() - tools_w;
+            egui::ScrollArea::horizontal().id_salt("tabs").max_width(tabs_w).show(ui, |ui| {
                 ui.horizontal_top(|ui| {
                     for i in 0..self.disks.len() {
                         let d = &self.disks[i];
@@ -1017,6 +1021,23 @@ impl eframe::App for App {
                     }
                 });
             });
+            if tools_w > 0.0 {
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    let big = |key: &'static str| egui::Button::new(RichText::new(self.tr(key)).strong()).min_size(Vec2::new(0.0, 40.0));
+                    if ui.add(big("fake_menu")).on_hover_text(self.tr("sum_fake_sub")).clicked() {
+                        tool = Some(summary::SummaryAction::Fake);
+                    }
+                    if ui.add(big("bench_menu")).on_hover_text(self.tr("sum_speed_sub")).clicked() {
+                        tool = Some(summary::SummaryAction::Speed);
+                    }
+                });
+            }
+            });
+            match tool {
+                Some(summary::SummaryAction::Speed) => self.bench_open(),
+                Some(summary::SummaryAction::Fake) => self.fake_open(),
+                None => {}
+            }
             ui.add_space(4.0);
 
             let d = self.disks[self.selected.min(self.disks.len() - 1)].clone();
