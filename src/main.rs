@@ -1041,7 +1041,10 @@ impl eframe::App for App {
                     ),
                     None => format!("{}: —", self.tr("activity")),
                 };
-                ui.label(RichText::new(line).color(pal.muted)).on_hover_text(self.tr("h_activity"));
+                // When the card on the right is shown, it shows the activity instead.
+                if ui.available_width() < 960.0 {
+                    ui.label(RichText::new(line).color(pal.muted)).on_hover_text(self.tr("h_activity"));
+                }
             });
             ui.add_space(6.0);
 
