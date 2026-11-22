@@ -345,6 +345,7 @@ const TEXTS: &[(&str, [&str; 6])] = &[
     ("sub_crypt", ["Volumen cifrado", "Encrypted volume", "Volume cifrado", "Volume chiffré", "Verschlüsseltes Volume", "Volume cifrato"]),
     ("sub_lvm", ["Volumen lógico LVM", "LVM logical volume", "Volume lógico LVM", "Volume logique LVM", "Logisches LVM-Volume", "Volume logico LVM"]),
     ("sub_raid", ["RAID", "RAID", "RAID", "RAID", "RAID", "RAID"]),
+    ("sub_apfs", ["Volumen APFS", "APFS volume", "Volume APFS", "Volume APFS", "APFS-Volume", "Volume APFS"]),
     ("sub_other", ["Dispositivo", "Device", "Dispositivo", "Périphérique", "Gerät", "Dispositivo"]),
     ("h_sub_shared", ["Comparte el espacio de la partición con los demás subvolúmenes.", "Shares the partition's space with the other subvolumes.", "Partilha o espaço da partição com os outros subvolumes.", "Partage l'espace de la partition avec les autres sous-volumes.", "Teilt den Platz der Partition mit den anderen Subvolumes.", "Condivide lo spazio della partizione con gli altri sottovolumi."]),
     ("h_sub_unmounted", ["No está montado.", "Not mounted.", "Não está montado.", "Non monté.", "Nicht eingehängt.", "Non montato."]),

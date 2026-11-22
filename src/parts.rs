@@ -462,8 +462,51 @@ pub fn from_diskutil(d: &mut Disk) {
                     part.free = Some(free);
                 }
             }
+            if part.fs == "Apple_APFS" {
+                apfs_volumes(&mut part, all);
+            }
             d.partitions.push(part);
         }
+    }
+    // The disk's own list of mount points (shown under its tab and in its details).
+    d.mounts = d.partitions.iter().flat_map(|p| p.mounts.iter().cloned()).filter(|m| !m.starts_with("/System/Volumes/") || m == "/System/Volumes/Data").collect();
+}
+
+/// An APFS partition holds a container whose volumes ("Macintosh HD", "Data"...) live on a
+/// separate synthesized disk (disk3s1...): list them under the partition, with their mount points.
+#[cfg(target_os = "macos")]
+fn apfs_volumes(part: &mut Partition, all: &[plist::Value]) {
+    let text = |dict: &plist::Dictionary, k: &str| dict.get(k).and_then(|v| v.as_string()).unwrap_or("").to_string();
+    let Some(container) = all.iter().filter_map(|v| v.as_dictionary()).find(|c| {
+        c.get("APFSPhysicalStores").and_then(|v| v.as_array()).into_iter().flatten().filter_map(|s| s.as_dictionary()).any(|s| text(s, "DeviceIdentifier") == part.name)
+    }) else {
+        return;
+    };
+    part.fs = "APFS".into();
+    for v in container.get("APFSVolumes").and_then(|v| v.as_array()).into_iter().flatten().filter_map(|v| v.as_dictionary()) {
+        let mount = text(v, "MountPoint");
+        let in_use = v.get("CapacityInUse").and_then(|x| x.as_unsigned_integer());
+        if !mount.is_empty() && !part.mounts.contains(&mount) {
+            part.mounts.push(mount.clone());
+        }
+        part.subs.push(SubVolume {
+            name: { let n = text(v, "VolumeName"); if n.is_empty() { text(v, "DeviceIdentifier") } else { n } },
+            kind: "sub_apfs",
+            fs: "APFS".into(),
+            size: in_use,
+            used: in_use,
+            free: None,
+            mounts: if mount.is_empty() { vec![] } else { vec![mount] },
+            id: text(v, "DeviceIdentifier"),
+        });
+    }
+    // Space used and free, from the volume people keep their files on.
+    let main = part.mounts.iter().find(|m| m.as_str() == "/System/Volumes/Data").or_else(|| part.mounts.first()).cloned();
+    if let Some((used, free)) = main.and_then(|m| df_usage(&m)) {
+        // Every volume shares the container's free space.
+        let _ = used;
+        part.free = Some(free);
+        part.used = Some(part.size.saturating_sub(free));
     }
 }
 

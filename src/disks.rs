@@ -422,21 +422,51 @@ fn scan_other(admin: bool) -> ScanResult {
         result.message = Some("msg_no_smartctl");
         return result;
     };
+    // macOS: the drives come from diskutil (disk0, disk4...). smartctl's own scan names Apple
+    // silicon drives by their long IOService path, which is no name for a person to read.
     #[cfg(target_os = "macos")]
-    if admin {
-        match mac_admin_read(&smartctl) {
-            Ok(list) => {
-                for (name, j) in list {
-                    let mut d = disk_for(&name, None);
-                    parse_smart(&mut d, &j);
-                    crate::parts::from_diskutil(&mut d);
-                    result.disks.push(d);
+    {
+        let mut disks = mac_disks();
+        if admin {
+            let names: Vec<String> = disks.iter().map(|d| d.dev.clone()).collect();
+            match mac_admin_read(&smartctl, &names) {
+                Ok(list) => {
+                    for (name, j) in list {
+                        if let Some(d) = disks.iter_mut().find(|d| d.dev == name) {
+                            parse_smart(d, &j);
+                        }
+                    }
                 }
-                return result;
+                Err(e) => result.message = Some(e),
             }
-            Err(e) => result.message = Some(e),
+        } else {
+            for d in &mut disks {
+                // Apple's internal NVMe drives sometimes need the type spelt out.
+                let read = match smartctl_read(&d.smart_dev, None) {
+                    SmartRead::Ok(j) => SmartRead::Ok(j),
+                    other if d.is_nvme => match smartctl_read(&d.smart_dev, Some("nvme")) {
+                        SmartRead::Ok(j) => SmartRead::Ok(j),
+                        _ => other,
+                    },
+                    other => other,
+                };
+                match read {
+                    SmartRead::Ok(j) => parse_smart(d, &j),
+                    SmartRead::Denied => result.needs_admin = true,
+                    _ => {}
+                }
+            }
         }
+        for d in &mut disks {
+            crate::parts::from_diskutil(d);
+        }
+        result.disks = disks;
+        if result.disks.iter().all(|d| !d.smart_read) && !crate::platform::is_admin() {
+            result.needs_admin = true;
+        }
+        return result;
     }
+    #[allow(unreachable_code)]
     let _ = admin;
     for (name, dtype) in scan_devices(&smartctl) {
         let mut d = disk_for(&name, dtype.clone());
@@ -497,11 +527,14 @@ fn scan_devices(smartctl: &str) -> Vec<(String, Option<String>)> {
 
 /// macOS: one administrator prompt (osascript) runs smartctl on every disk as root.
 #[cfg(target_os = "macos")]
-fn mac_admin_read(smartctl: &str) -> Result<Vec<(String, Value)>, &'static str> {
+fn mac_admin_read(smartctl: &str, names: &[String]) -> Result<Vec<(String, Value)>, &'static str> {
     let q = crate::smartctl::shell_quote(smartctl);
-    let script = format!(
-        "{q} --scan | while read n x t r; do echo \"@@DEV $n\"; {q} -j -x -d \"$t\" \"$n\"; done"
-    );
+    // Only plain BSD names ("disk0") go into the script.
+    let list: Vec<&str> = names.iter().map(String::as_str).filter(|n| n.chars().all(|c| c.is_ascii_alphanumeric())).collect();
+    if list.is_empty() {
+        return Err("msg_denied");
+    }
+    let script = format!("for n in {}; do echo \"@@DEV $n\"; {q} -j -x /dev/$n; done", list.join(" "));
     let apple = format!(
         "do shell script \"{}\" with administrator privileges",
         script.replace('\\', "\\\\").replace('"', "\\\"")
@@ -516,6 +549,45 @@ fn mac_admin_read(smartctl: &str) -> Result<Vec<(String, Value)>, &'static str> 
         return Err("msg_denied");
     }
     Ok(split_dev_chunks(&text))
+}
+
+/// macOS: the physical drives diskutil lists, with the name, size and kind it gives them.
+#[cfg(target_os = "macos")]
+fn mac_disks() -> Vec<Disk> {
+    let plist_of = |args: &[&str]| -> Option<plist::Dictionary> {
+        let out = crate::platform::command("diskutil").args(args).output().ok()?;
+        plist::Value::from_reader_xml(&out.stdout[..]).ok()?.into_dictionary()
+    };
+    let Some(list) = plist_of(&["list", "-plist", "physical"]) else { return Vec::new() };
+    let whole: Vec<String> = list
+        .get("WholeDisks")
+        .and_then(|v| v.as_array())
+        .into_iter()
+        .flatten()
+        .filter_map(|v| v.as_string().map(str::to_string))
+        .collect();
+    let mut disks = Vec::new();
+    for id in whole {
+        let info = plist_of(&["info", "-plist", &id]).unwrap_or_default();
+        let text = |k: &str| info.get(k).and_then(|v| v.as_string()).unwrap_or("").trim().to_string();
+        let flag = |k: &str| info.get(k).and_then(|v| v.as_boolean()).unwrap_or(false);
+        let size = ["TotalSize", "Size"].iter().find_map(|k| info.get(*k).and_then(|v| v.as_unsigned_integer())).unwrap_or(0);
+        let mut d = Disk {
+            dev: id.clone(),
+            smart_dev: format!("/dev/{id}"),
+            path_label: format!("/dev/{id}"),
+            model: text("MediaName"),
+            size_bytes: size,
+            is_ssd: flag("SolidState"),
+            interface: text("BusProtocol"),
+            ..Default::default()
+        };
+        d.is_nvme = d.interface.contains("PCI") || d.interface.contains("Apple Fabric") || d.interface.contains("NVMe");
+        let removable = flag("Removable") || flag("RemovableMedia") || flag("Ejectable") || !flag("Internal");
+        crate::parts::set_detail(&mut d, "d_removable", if removable { "yes" } else { "no" });
+        disks.push(d);
+    }
+    disks
 }
 
 /// Windows: disks Windows itself lists (works without administrator rights) and drive letters.

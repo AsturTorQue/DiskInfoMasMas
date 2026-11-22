@@ -1043,7 +1043,10 @@ impl eframe::App for App {
             let d = self.disks[self.selected.min(self.disks.len() - 1)].clone();
             let th = self.settings.thresholds_for(&d);
             ui.vertical_centered(|ui| {
-                ui.label(RichText::new(format!("{} {}", d.model, self.size_text(d.size_bytes))).size(20.0).strong());
+                // A very long name (some systems give a device path) is cut, never wider than the window.
+                let model: String = if d.model.chars().count() > 60 { d.model.chars().take(57).collect::<String>() + "…" } else { d.model.clone() };
+                ui.add(egui::Label::new(RichText::new(format!("{model} {}", self.size_text(d.size_bytes))).size(20.0).strong()).truncate())
+                    .on_hover_text(&d.model);
                 // Live activity, refreshed every second.
                 let sp = self.speeds.lock().ok().and_then(|m| m.get(&speed::key_for(&d)).copied());
                 let rate = |b: Option<f64>| match b {
