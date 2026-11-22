@@ -983,7 +983,25 @@ impl eframe::App for App {
             let needed = text_w("fake_menu") + text_w("bench_menu") + 2.0 * pad + 16.0;
             let tools_w = if ui.available_width() - needed >= 260.0 { needed } else { 0.0 };
             let tabs_w = ui.available_width() - tools_w;
-            egui::ScrollArea::horizontal().id_salt("tabs").max_width(tabs_w).show(ui, |ui| {
+            // When the disks do not fit, arrows on both sides move the row (last frame's sizes
+            // say whether it overflows and where it is).
+            let mem = egui::Id::new("tabs_overflow");
+            let (offset, content_w, view_w) = ui.ctx().data(|d| d.get_temp::<(f32, f32, f32)>(mem)).unwrap_or((0.0, 0.0, 0.0));
+            let overflow = content_w > view_w + 1.0;
+            let arrow = |ui: &mut egui::Ui, text: &str, enabled: bool| {
+                ui.add_enabled(enabled, egui::Button::new(RichText::new(text).size(18.0).strong()).min_size(Vec2::new(28.0, 46.0))).clicked()
+            };
+            let mut new_offset = None;
+            if overflow && arrow(ui, "<", offset > 0.5) {
+                new_offset = Some((offset - view_w * 0.8).max(0.0));
+            }
+            let tabs_w = if overflow { tabs_w - 2.0 * (28.0 + ui.spacing().item_spacing.x) } else { tabs_w };
+            let mut area = egui::ScrollArea::horizontal().id_salt("tabs").max_width(tabs_w);
+            if let Some(o) = new_offset {
+                area = area.horizontal_scroll_offset(o);
+            }
+            let next_click = std::cell::Cell::new(false);
+            let out = area.show(ui, |ui| {
                 ui.horizontal_top(|ui| {
                     for i in 0..self.disks.len() {
                         let d = &self.disks[i];
@@ -1021,6 +1039,19 @@ impl eframe::App for App {
                     }
                 });
             });
+            let (o, cw, vw) = (out.state.offset.x, out.content_size.x, out.inner_rect.width());
+            if overflow && arrow(ui, ">", o + vw < cw - 0.5) {
+                next_click.set(true);
+            }
+            let o = if next_click.get() { (o + vw * 0.8).min((cw - vw).max(0.0)) } else { o };
+            if next_click.get() {
+                // Applied on the next frame.
+                let mut state = out.state;
+                state.offset.x = o;
+                state.store(ui.ctx(), out.id);
+                ui.ctx().request_repaint();
+            }
+            ui.ctx().data_mut(|d| d.insert_temp(mem, (o, cw, vw)));
             if tools_w > 0.0 {
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     let big = |key: &'static str| egui::Button::new(RichText::new(self.tr(key)).strong()).min_size(Vec2::new(0.0, 40.0));
