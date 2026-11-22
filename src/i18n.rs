@@ -76,7 +76,7 @@ const TEXTS: &[(&str, [&str; 6])] = &[
     ("fahrenheit", ["Grados Fahrenheit", "Fahrenheit degrees", "Graus Fahrenheit", "Degrés Fahrenheit", "Grad Fahrenheit", "Gradi Fahrenheit"]),
     ("theme_light", ["Claro", "Light", "Claro", "Clair", "Hell", "Chiaro"]),
     ("theme_dark", ["Oscuro", "Dark", "Escuro", "Sombre", "Dunkel", "Scuro"]),
-    ("theme_mint", ["Menta", "Mint", "Menta", "Menthe", "Minze", "Menta"]),
+    ("theme_amber", ["Ámbar", "Amber", "Âmbar", "Ambre", "Bernstein", "Ambra"]),
     ("theme_ocean", ["Océano", "Ocean", "Oceano", "Océan", "Ozean", "Oceano"]),
     ("theme_sakura", ["Sakura", "Sakura", "Sakura", "Sakura", "Sakura", "Sakura"]),
     ("theme_contrast", ["Alto contraste", "High contrast", "Alto contraste", "Contraste élevé", "Hoher Kontrast", "Alto contrasto"]),

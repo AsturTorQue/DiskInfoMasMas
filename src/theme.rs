@@ -8,21 +8,23 @@ pub enum Theme {
     #[default]
     Light,
     Dark,
-    Mint,
+    /// Warm orange (replaces the old green "Mint": settings saved with it load as this one).
+    #[serde(alias = "Mint")]
+    Amber,
     Ocean,
     Sakura,
     Contrast,
 }
 
 impl Theme {
-    pub const ALL: [Theme; 6] = [Theme::Light, Theme::Dark, Theme::Mint, Theme::Ocean, Theme::Sakura, Theme::Contrast];
+    pub const ALL: [Theme; 6] = [Theme::Light, Theme::Dark, Theme::Amber, Theme::Ocean, Theme::Sakura, Theme::Contrast];
 
     /// Text key in i18n.
     pub fn name_key(self) -> &'static str {
         match self {
             Theme::Light => "theme_light",
             Theme::Dark => "theme_dark",
-            Theme::Mint => "theme_mint",
+            Theme::Amber => "theme_amber",
             Theme::Ocean => "theme_ocean",
             Theme::Sakura => "theme_sakura",
             Theme::Contrast => "theme_contrast",
@@ -39,14 +41,14 @@ impl Theme {
             value_bg: Color32::WHITE,
             stroke: Color32::from_gray(190),
             tab_bg: Color32::from_gray(240),
-            tab_sel_bg: rgb(220, 232, 250),
-            accent: rgb(90, 140, 220),
+            // Green everywhere in the light scheme: selections, buttons, graphs, "Good".
+            tab_sel_bg: rgb(206, 236, 215),
+            accent: rgb(40, 150, 90),
             stripe: Color32::from_gray(242),
             banner_bg: rgb(255, 246, 210),
             banner_stroke: rgb(220, 180, 60),
             banner_text: rgb(70, 55, 10),
             error: rgb(170, 60, 20),
-            // "Good" is green in the light scheme (no separate green mode any more).
             good: rgb(46, 170, 87),
             caution: rgb(240, 190, 30),
             bad: rgb(215, 50, 45),
@@ -60,14 +62,15 @@ impl Theme {
             value_bg: rgb(22, 23, 26),
             stroke: Color32::from_gray(75),
             tab_bg: rgb(42, 44, 50),
-            tab_sel_bg: rgb(40, 62, 98),
-            accent: rgb(90, 150, 235),
+            // Green too in the dark scheme.
+            tab_sel_bg: rgb(30, 78, 52),
+            accent: rgb(70, 190, 120),
             stripe: rgb(38, 40, 45),
             banner_bg: rgb(70, 58, 20),
             banner_stroke: rgb(170, 135, 40),
             banner_text: rgb(250, 230, 170),
             error: rgb(255, 140, 100),
-            good: rgb(70, 145, 235),
+            good: rgb(55, 175, 95),
             caution: rgb(235, 185, 40),
             bad: rgb(225, 65, 60),
             unknown: rgb(105, 105, 112),
@@ -75,14 +78,15 @@ impl Theme {
         match self {
             Theme::Light => base_light,
             Theme::Dark => base_dark,
-            Theme::Mint => Palette {
-                bg: rgb(238, 247, 241),
-                tab_bg: rgb(228, 241, 233),
-                tab_sel_bg: rgb(204, 236, 214),
-                accent: rgb(40, 150, 90),
-                stripe: rgb(234, 245, 238),
-                stroke: rgb(170, 200, 180),
-                good: rgb(46, 170, 87),
+            Theme::Amber => Palette {
+                bg: rgb(253, 245, 236),
+                tab_bg: rgb(250, 236, 220),
+                tab_sel_bg: rgb(252, 220, 184),
+                accent: rgb(220, 115, 25),
+                stripe: rgb(251, 240, 228),
+                stroke: rgb(225, 195, 165),
+                // "Good" in blue here: an orange "Good" would look like a warning.
+                good: rgb(45, 120, 215),
                 ..base_light
             },
             Theme::Ocean => Palette {
@@ -155,6 +159,17 @@ pub struct Palette {
 }
 
 impl Palette {
+    /// A second colour that stands apart from the accent (writes next to reads, two lines in a graph).
+    pub fn second(&self) -> Color32 {
+        let a = self.accent;
+        // Orange beside green or blue accents; blue beside warm (orange, pink) ones.
+        if a.r() > a.g() && a.r() > a.b() {
+            Color32::from_rgb(60, 130, 220)
+        } else {
+            Color32::from_rgb(235, 140, 30)
+        }
+    }
+
     pub fn visuals(&self) -> egui::Visuals {
         let mut v = if self.dark { egui::Visuals::dark() } else { egui::Visuals::light() };
         v.panel_fill = self.bg;
@@ -170,6 +185,10 @@ impl Palette {
         v.widgets.hovered.weak_bg_fill = self.tab_sel_bg;
         v.widgets.hovered.bg_fill = self.tab_sel_bg;
         v.widgets.active.weak_bg_fill = self.accent.gamma_multiply(0.7);
+        // Outlines of hovered and pressed controls, and the text cursor, in the theme's colour too.
+        v.widgets.hovered.bg_stroke.color = self.accent;
+        v.widgets.active.bg_stroke.color = self.accent;
+        v.text_cursor.stroke.color = self.accent;
         v
     }
 }

@@ -143,7 +143,7 @@ cargo build --release
 ./target/release/diskinfo
 ```
 
-Options: `--lang es|en|pt|fr|de|it`, `--theme light|dark|mint|ocean|sakura|contrast`,
+Options: `--lang es|en|pt|fr|de|it`, `--theme light|dark|amber|ocean|sakura|contrast`,
 `--demo` (two sample disks), `--screenshot file.png` (draw, save a picture and exit).
 Run the tests with `cargo test`.
 

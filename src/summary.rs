@@ -12,8 +12,6 @@ pub enum SummaryAction {
     Fake,
 }
 
-/// Write speeds are shown in this colour, reads in the theme's accent.
-const WRITE: Color32 = Color32::from_rgb(235, 140, 30);
 
 /// A box with a small title over a large number.
 /// Its size never depends on the number shown, so nothing around it moves when the speed changes.
@@ -56,7 +54,7 @@ impl App {
             _ => {
                 stat(ui, pal, width, self.tr("act_read"), &rate(sp.and_then(|s| s.read)), pal.accent);
                 ui.add_space(6.0);
-                stat(ui, pal, width, self.tr("act_write"), &rate(sp.and_then(|s| s.write)), WRITE);
+                stat(ui, pal, width, self.tr("act_write"), &rate(sp.and_then(|s| s.write)), pal.second());
             }
         }
         action

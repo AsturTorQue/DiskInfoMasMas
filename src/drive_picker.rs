@@ -404,7 +404,7 @@ pub(crate) fn speed_graph(ui: &mut egui::Ui, pal: &crate::theme::Palette, s: &cr
         }
     };
     line(&s.hist_write, 0, pal.accent);
-    let orange = Color32::from_rgb(235, 140, 30);
+    let orange = pal.second();
     line(&s.hist_read, nw.saturating_sub(1), orange);
     ui.horizontal(|ui| {
         ui.label(RichText::new(format!("- {}", legend.0)).small().color(pal.accent));

@@ -2176,7 +2176,7 @@ fn main() -> eframe::Result<()> {
     let theme = arg_value(&args, "--theme").and_then(|v| match v.as_str() {
         "light" => Some(Theme::Light),
         "dark" => Some(Theme::Dark),
-        "mint" => Some(Theme::Mint),
+        "amber" | "mint" => Some(Theme::Amber),
         "ocean" => Some(Theme::Ocean),
         "sakura" => Some(Theme::Sakura),
         "contrast" => Some(Theme::Contrast),
