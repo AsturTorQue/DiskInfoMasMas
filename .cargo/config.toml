@@ -1,0 +1,8 @@
+# The Microsoft C runtime is put inside DiskInfo++.exe, so it starts on PCs that don't have the
+# "Visual C++ Redistributable" installed (otherwise Windows only says VCRUNTIME140.dll is missing,
+# or nothing at all).
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]
+
+[target.aarch64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]

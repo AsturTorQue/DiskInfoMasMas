@@ -2126,6 +2126,9 @@ fn arg_value(args: &[String], name: &str) -> Option<String> {
 
 fn main() -> eframe::Result<()> {
     let args: Vec<String> = std::env::args().collect();
+    if cfg!(windows) {
+        install_crash_report();
+    }
     // `diskinfo --try-sound` plays the alarm once and says whether it worked.
     if args.iter().any(|a| a == "--try-sound") {
         let ok = alerts::play_sound_blocking();
@@ -2201,8 +2204,13 @@ fn main() -> eframe::Result<()> {
             viewport = viewport.with_window_level(egui::WindowLevel::AlwaysOnBottom);
         }
     }
-    let options = eframe::NativeOptions { viewport, ..Default::default() };
-    eframe::run_native(
+    #[allow(unused_mut)]
+    let mut options = eframe::NativeOptions { viewport, ..Default::default() };
+    #[cfg(windows)]
+    {
+        options.renderer = eframe::Renderer::Wgpu;
+    }
+    let result = eframe::run_native(
         APP_NAME,
         options,
         Box::new(move |_cc| {
@@ -2250,5 +2258,39 @@ fn main() -> eframe::Result<()> {
             };
             Ok(Box::new(app))
         }),
-    )
+    );
+    if let Err(e) = &result {
+        report_startup_error(&e.to_string());
+    }
+    result
+}
+
+/// Says why the window could not open: on Windows a program without a console otherwise just
+/// vanishes. Writes `startup-error.log` in the settings folder and, on Windows, shows a message.
+fn report_startup_error(msg: &str) {
+    let text = format!("{APP_NAME} {}: {msg}", env!("CARGO_PKG_VERSION"));
+    eprintln!("{text}");
+    if let Some(dir) = platform::config_dir() {
+        let _ = std::fs::create_dir_all(&dir);
+        let _ = std::fs::write(dir.join("startup-error.log"), format!("{text}\n"));
+    }
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::UI::WindowsAndMessaging::{MessageBoxW, MB_ICONERROR, MB_OK};
+        let wide = |s: &str| s.encode_utf16().chain(std::iter::once(0)).collect::<Vec<u16>>();
+        let (body, title) = (wide(&text), wide(APP_NAME));
+        // SAFETY: both strings are NUL-terminated and live until the call returns.
+        unsafe {
+            MessageBoxW(std::ptr::null_mut(), body.as_ptr(), title.as_ptr(), MB_OK | MB_ICONERROR);
+        }
+    }
+}
+
+/// A crash in a Windows program without a console is silent: say what happened instead.
+fn install_crash_report() {
+    let default = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        report_startup_error(&info.to_string());
+        default(info);
+    }));
 }
