@@ -2209,10 +2209,13 @@ fn main() -> eframe::Result<()> {
     #[cfg(windows)]
     {
         options.renderer = eframe::Renderer::Wgpu;
+        options.wgpu_options = windows_wgpu_options();
     }
-    let result = eframe::run_native(
-        APP_NAME,
-        options,
+    #[cfg(windows)]
+    let glow_options = eframe::NativeOptions { renderer: eframe::Renderer::Glow, ..options.clone() };
+    // Makes the app; called again if the first way of drawing the window does not work.
+    let make = move || -> eframe::AppCreator<'static> {
+        let (shot, open_window, tab) = (shot.clone(), open_window.clone(), tab.clone());
         Box::new(move |_cc| {
             let mut app = App::new(shot, lang, theme, demo);
             if try_save {
@@ -2257,8 +2260,18 @@ fn main() -> eframe::Result<()> {
                 _ => Tab::Smart,
             };
             Ok(Box::new(app))
+        })
+    };
+    let result = eframe::run_native(APP_NAME, options, make());
+    // Windows: no usable Direct3D/Vulkan device (some virtual machines, remote desktops, old
+    // drivers): try OpenGL before giving up.
+    #[cfg(windows)]
+    let result = match result {
+        Err(first) => eframe::run_native(APP_NAME, glow_options, make()).map_err(|second| {
+            eframe::Error::AppCreation(format!("Direct3D/Vulkan: {first}\nOpenGL: {second}").into())
         }),
-    );
+        ok => ok,
+    };
     if let Err(e) = &result {
         report_startup_error(&e.to_string());
     }
@@ -2284,6 +2297,34 @@ fn report_startup_error(msg: &str) {
             MessageBoxW(std::ptr::null_mut(), body.as_ptr(), title.as_ptr(), MB_OK | MB_ICONERROR);
         }
     }
+}
+
+/// Windows: accept any graphics device wgpu can see, including Microsoft's software one (WARP)
+/// that virtual machines and basic display drivers have, and every backend (Direct3D 12, Vulkan,
+/// OpenGL). The default only takes a "proper" GPU and fails with "no suitable adapter".
+#[cfg(windows)]
+fn windows_wgpu_options() -> eframe::egui_wgpu::WgpuConfiguration {
+    use eframe::egui_wgpu::{WgpuConfiguration, WgpuSetup, WgpuSetupCreateNew};
+    use eframe::wgpu;
+    let mut create = WgpuSetupCreateNew::default();
+    create.instance_descriptor.backends = wgpu::Backends::all();
+    create.native_adapter_selector = Some(std::sync::Arc::new(|adapters: &[wgpu::Adapter], surface: Option<&wgpu::Surface<'_>>| {
+        let usable: Vec<&wgpu::Adapter> = adapters.iter().filter(|a| surface.map_or(true, |s| a.is_surface_supported(s))).collect();
+        // A real graphics card first, then a built-in one, then anything (software included).
+        let rank = |a: &wgpu::Adapter| match a.get_info().device_type {
+            wgpu::DeviceType::DiscreteGpu => 0,
+            wgpu::DeviceType::IntegratedGpu => 1,
+            wgpu::DeviceType::VirtualGpu => 2,
+            wgpu::DeviceType::Other => 3,
+            wgpu::DeviceType::Cpu => 4,
+        };
+        usable
+            .into_iter()
+            .min_by_key(|a| rank(a))
+            .cloned()
+            .ok_or_else(|| format!("no graphics device among {} found", adapters.len()))
+    }));
+    WgpuConfiguration { wgpu_setup: WgpuSetup::CreateNew(create), ..Default::default() }
 }
 
 /// A crash in a Windows program without a console is silent: say what happened instead.
