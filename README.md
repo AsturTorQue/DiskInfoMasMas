@@ -89,7 +89,7 @@ When the system already has `smartctl`, that one is used.
   almost full, and Windows' own volume health.
 - Adjustable warning thresholds per disk (reallocated / pending / uncorrectable sectors,
   SSD life, temperature alarm).
-- Auto refresh, copy a text report, Fahrenheit, green mode.
+- Auto refresh, copy a text report, Fahrenheit.
 - 6 languages (Español, English, Português, Français, Deutsch, Italiano) and 6 themes.
 - Linux: optional passwordless reading through a narrow polkit rule (see below).
 
