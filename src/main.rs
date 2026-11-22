@@ -43,6 +43,8 @@ use theme::{Palette, Theme};
 #[serde(default)]
 struct Settings {
     auto_refresh_min: u32,
+    /// No longer offered (the light scheme is green); kept so older settings files still load.
+    #[allow(dead_code)]
     green_mode: bool,
     fahrenheit: bool,
     language: Lang,
@@ -482,7 +484,6 @@ impl App {
     fn status_colors(&self, s: Status) -> (Color32, Color32) {
         let p = self.pal();
         match s {
-            Status::Good if self.settings.green_mode => (Color32::from_rgb(46, 170, 87), Color32::WHITE),
             Status::Good => (p.good, Color32::WHITE),
             Status::Caution => (p.caution, Color32::from_rgb(40, 30, 0)),
             Status::Bad => (p.bad, Color32::WHITE),
@@ -857,10 +858,6 @@ impl eframe::App for App {
                     if ui.checkbox(&mut self.settings.alert_sound, label).changed() {
                         self.settings.save();
                     }
-                    if ui.button(self.tr("alert_sound_test")).clicked() {
-                        alerts::play_sound();
-                        ui.close_menu();
-                    }
                     if ui.button(self.tr("alert_history_menu")).clicked() {
                         self.show_alerts = true;
                         ui.close_menu();
@@ -882,10 +879,7 @@ impl eframe::App for App {
                         }
                     }
                     ui.separator();
-                    let (green, fahrenheit) = (self.tr("green_mode"), self.tr("fahrenheit"));
-                    if ui.checkbox(&mut self.settings.green_mode, green).changed() {
-                        self.settings.save();
-                    }
+                    let fahrenheit = self.tr("fahrenheit");
                     if ui.checkbox(&mut self.settings.fahrenheit, fahrenheit).changed() {
                         self.settings.save();
                     }
@@ -981,7 +975,13 @@ impl eframe::App for App {
             // Disk tabs, and on the right the tools that work on any drive (not only the one shown).
             let mut tool = None;
             ui.horizontal(|ui| {
-            let tools_w = if ui.available_width() >= 760.0 { 400.0 } else { 0.0 };
+            // The buttons' real width (it depends on the language), so the tabs get exactly the
+            // rest: with many disks the tabs scroll sideways and never run under the buttons.
+            let font = egui::TextStyle::Button.resolve(ui.style());
+            let pad = ui.spacing().button_padding.x * 2.0 + ui.spacing().item_spacing.x;
+            let text_w = |key: &'static str| ui.fonts(|f| f.layout_no_wrap(self.tr(key).to_string(), font.clone(), Color32::WHITE).size().x);
+            let needed = text_w("fake_menu") + text_w("bench_menu") + 2.0 * pad + 16.0;
+            let tools_w = if ui.available_width() - needed >= 260.0 { needed } else { 0.0 };
             let tabs_w = ui.available_width() - tools_w;
             egui::ScrollArea::horizontal().id_salt("tabs").max_width(tabs_w).show(ui, |ui| {
                 ui.horizontal_top(|ui| {

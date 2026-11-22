@@ -46,7 +46,8 @@ impl Theme {
             banner_stroke: rgb(220, 180, 60),
             banner_text: rgb(70, 55, 10),
             error: rgb(170, 60, 20),
-            good: rgb(45, 120, 215),
+            // "Good" is green in the light scheme (no separate green mode any more).
+            good: rgb(46, 170, 87),
             caution: rgb(240, 190, 30),
             bad: rgb(215, 50, 45),
             unknown: rgb(112, 112, 118),

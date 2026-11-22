@@ -104,7 +104,18 @@ pub fn demo_scan() -> ScanResult {
     ];
     set_detail(&mut b, "d_path", "/dev/nvme0n1");
     set_detail(&mut b, "d_part_table", "GPT");
-    ScanResult { disks: vec![a, b], needs_admin: false, message: None, passwordless: false }
+    let mut disks = vec![a, b];
+    // DISKINFO_DEMO_DISKS=8 shows that many sample disks (to check the layout with many drives).
+    let want: usize = std::env::var("DISKINFO_DEMO_DISKS").ok().and_then(|v| v.parse().ok()).unwrap_or(2).clamp(2, 32);
+    let mut n = 0;
+    while disks.len() < want {
+        let mut c = disks[n % 2].clone();
+        c.dev = format!("sd{}", (b'c' + n as u8) as char);
+        c.serial = format!("DEMO{:04}", n + 3);
+        disks.push(c);
+        n += 1;
+    }
+    ScanResult { disks, needs_admin: false, message: None, passwordless: false }
 }
 
 /// Two months of made-up readings for the sample disks, so the History tab has something to draw.
